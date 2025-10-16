@@ -29,6 +29,10 @@ async window.nostr.nip44.decrypt(pubkey, ciphertext): string // takes ciphertext
 
 ## General Instructions:
 
+- There are AGENTS.md files on many of the projects subfolders explaining further
+what is expected to be on each of these subfolders and how to use them. After finishing
+reading this current AGENTS.md file, find and read all the other
+ones to get the project's complete picture.
 - Use vanilla Javascript.
 - Use package.json "imports" aliases for importing files.
 - Ensure all new functions and classes have regular comments instead of JSDoc with a brief description.
@@ -36,10 +40,10 @@ async window.nostr.nip44.decrypt(pubkey, ciphertext): string // takes ciphertext
 - Use kebab-case for filenames.
 - If there is no "tests" root folder, don't create one and don't add tests.
 - Do not change the src/assets/html/index.html file. Instead,
-  change the src/components/app.js component (`<a-app>`) it loads. In fact keep
-  app.js lean. It loads the src/components/router.js component,
+  change the src/components/app.js component (`<a-app>`) it loads (the root component).
+  In fact keep app.js lean. It loads the src/components/router.js component,
   which then loads other components placed at src/components/views folder.
-- Note that navigation should be performed using src/components/hooks/use-location.js
+- Note that route navigation should be performed using src/components/hooks/use-location.js
   hook's methods such as location.pushState and location.replaceState.
 
 ## Coding Style:

@@ -31,8 +31,8 @@ const ctx = await esbuild.context({
     : { define: { 'window.IS_PRODUCTION': JSON.stringify(true) } }),
   entryPoints: [
     `${dirname}/../src/components/app.js`,
-    `${dirname}/../src/assets/html/index.html` // will use "copy" loader
-    // `${dirname}/../src/assets/media/favicon.ico` // will use "copy" loader
+    `${dirname}/../src/assets/html/index.html`, // will use "copy" loader
+    `${dirname}/../src/assets/media/favicon.ico` // will use "copy" loader
   ],
   outdir: isDev
     // .serve({ servedir: `${dirname}/../src/assets/html` }) will serve app.js from memory as if it was there

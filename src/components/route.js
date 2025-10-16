@@ -1,15 +1,36 @@
 import { f, useStore, useTask, useClosestStore } from '#f'
 import useLocation from '#hooks/use-location.js'
 
+// props: {
+// shouldPreload($)=true|false,
+// path($)='/some-path'|paths($)=['/some-path', ...]
+// }
 f(function aRoute () {
   const location = useLocation()
-  const { isLoaded$, shouldLoad$, route$ } = useStore(() => ({
+  const {
+    isLoaded$, wasAlreadyLoaded$,
+    route$, shouldLoad$,
+    paths$,
+    shouldPreload$,
+    /* maxVisibleDistance$, */ shouldUpdateUidWhenPathMatches$
+  } = useStore(() => ({
     isLoaded$: false,
+    wasAlreadyLoaded$: false,
     route$: null,
-    shouldLoad$ () { return !this.isLoaded$() && (this.route$() || (this.props.shouldPreload ?? false)) }
+    shouldLoad$ () { return !this.isLoaded$() && !!this.route$() },
+    paths$:
+      this.props.paths$ ||
+      (this.props.path$ && (() => [this.props.path$()])) ||
+      this.props.paths ||
+      [this.props.path],
+    shouldPreload$: this.props.shouldPreload$ ?? this.props.shouldPreload ?? false,
+    maxVisibleDistance$: this.props.maxVisibleDistance$ ?? this.props.maxVisibleDistance ?? 0,
+    shouldUpdateUidWhenPathMatches$: this.props.shouldUpdateUidWhenPathMatches$ ?? this.props.shouldUpdateUidWhenPathMatches ?? true
   }))
+
   // Pass props by both initializing this closest store and also inline at the loaded compoment
   const routeProps = useClosestStore('<a-route>', {
+    uid$: null,
     url$: null,
     path$: null,
     state$: null,
@@ -17,25 +38,71 @@ f(function aRoute () {
   })
 
   useTask(({ track }) => {
-    track(() => [isLoaded$(), location.path$()])
-    if (isLoaded$() || location.path$() !== this.props.path) return
+    track(() => [isLoaded$(), shouldPreload$(), location.path$()])
+    let matchedPath
+    if (
+      isLoaded$() ||
+      (
+        !shouldPreload$() &&
+        !(matchedPath = paths$().find(v => v === location.path$()))
+      )
+    ) return
 
-    route$(this.props.router ? location.getRoute(this.props.router) : location.route$())
-    routeProps.url$(location.url$())
-    routeProps.path$(location.path$())
+    const path = matchedPath ?? paths$()[0] // the latter if shouldPreload$=true
+    // uidCounter$ before route$, cause route$ updates shouldLoad$ that then loads the page
+    // setting isLoaded$ to true
+    routeProps.uid$(location.uidCounter$())
+    route$(location.getRoute(path))
+    routeProps.params$(location.getParams(path))
     routeProps.state$(location.state$())
-    routeProps.params$(location.params$())
+    routeProps.url$(location.url$())
+  })
+
+  useTask(({ track }) => {
+    const [route, locationPath] = track(() => [route$(), location.path$(), shouldUpdateUidWhenPathMatches$()])
+    if (!route) return
+    let matchedPath
+    if (!(matchedPath = paths$().find(v => v === locationPath))) return
+
+    routeProps.path$(matchedPath)
   })
 
   useTask(async ({ track }) => {
-    if (!track(() => shouldLoad$())) return
+    const [shouldLoad, isLoaded] = track(() => [shouldLoad$(), isLoaded$()])
+    if (!shouldLoad || isLoaded) return
 
-    await route$().loadModule()
+    await route$().handler.loadModule()
     isLoaded$(true)
   })
 
-  if (!isLoaded$()) return
+  useTask(async ({ track }) => {
+    const [isLoaded, currentUid] = track(() => [
+      isLoaded$(),
+      location.currentUid$(),
+      shouldUpdateUidWhenPathMatches$()
+    ])
+
+    if (!isLoaded) return
+    if (!wasAlreadyLoaded$()) {
+      wasAlreadyLoaded$(true)
+      return
+    }
+    if (!shouldUpdateUidWhenPathMatches$() || routeProps.path$() !== location.path$()) return
+
+    // to use with this check below: Math.abs(routeProps.uid$() - location.currentUid$()) > maxVisibleDistance$()
+    routeProps.uid$(currentUid)
+  })
+
+  // TODO: fix this; if uncommenting, all routes blink when navigating
+  // e.g. wasAlreadyLoaded$ gets reinitialized to false on navigation
+  if (
+    !isLoaded$() // ||
+    // (
+    //   routeProps.uid$() &&
+    //   Math.abs(routeProps.uid$() - location.currentUid$()) > maxVisibleDistance$()
+    // )
+  ) return
 
   // dynamic tag doesn't work with uhtml: return this.h`<${tag} props=${{}} />`
-  return this.h([`<${route$().tag} props=`, ' />'], routeProps)
+  return this.h([`<${route$().handler.tag} props=`, ' />'], routeProps)
 })
