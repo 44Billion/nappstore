@@ -1,23 +1,23 @@
 import { f, useStore, useTask, useClosestStore } from '#f'
 import useLocation from '#hooks/use-location.js'
+import '#views/home/tabs.js'
 
 // props: {
 // shouldPreload($)=true|false,
 // path($)='/some-path'|paths($)=['/some-path', ...]
 // }
 f(function aRoute () {
-  const location = useLocation()
+  const loc = useLocation()
   const {
-    isLoaded$, wasAlreadyLoaded$,
-    route$, shouldLoad$,
+    isLoaded$,
+    routerMatch$, shouldLoad$,
     paths$,
     shouldPreload$,
-    /* maxVisibleDistance$, */ shouldUpdateUidWhenPathMatches$
+    maxVisibleDistance$, shouldUpdateUidWhenPathMatches$
   } = useStore(() => ({
     isLoaded$: false,
-    wasAlreadyLoaded$: false,
-    route$: null,
-    shouldLoad$ () { return !this.isLoaded$() && !!this.route$() },
+    routerMatch$: null,
+    shouldLoad$ () { return !this.isLoaded$() && !!this.routerMatch$() },
     paths$:
       this.props.paths$ ||
       (this.props.path$ && (() => [this.props.path$()])) ||
@@ -30,79 +30,83 @@ f(function aRoute () {
 
   // Pass props by both initializing this closest store and also inline at the loaded compoment
   const routeProps = useClosestStore('<a-route>', {
-    uid$: null,
-    url$: null,
-    path$: null,
-    state$: null,
-    params$: null
+    route$: {
+      uid: null,
+      url: null,
+      path: null,
+      params: null,
+      state: null
+    }
   })
 
+  // doesn't run until route matches for the first time (when routerMatch$ is set),
+  // but on later path changes
   useTask(({ track }) => {
-    track(() => [isLoaded$(), shouldPreload$(), location.path$()])
+    const [routerMatch, locationPath] = track(() => [routerMatch$(), loc.route$().path, shouldUpdateUidWhenPathMatches$()])
+    if (!routerMatch) return
+    let matchedPath
+    if (!(matchedPath = paths$().find(v => v === locationPath))) return
+
+    routeProps.route$({
+      ...loc.route$(),
+      // we don't want to update routerMatch$ on this useTask, just extract current params
+      params: loc.getRouterMatch(matchedPath).params
+    })
+  })
+
+  // runs until route matches for the first time
+  useTask(({ track }) => {
+    track(() => [isLoaded$(), shouldPreload$(), loc.route$().path])
     let matchedPath
     if (
       isLoaded$() ||
       (
         !shouldPreload$() &&
-        !(matchedPath = paths$().find(v => v === location.path$()))
+        !(matchedPath = paths$().find(v => v === loc.route$().path))
       )
     ) return
 
     const path = matchedPath ?? paths$()[0] // the latter if shouldPreload$=true
-    // uidCounter$ before route$, cause route$ updates shouldLoad$ that then loads the page
+    const routerMatch = loc.getRouterMatch(path)
+    // uid etc before routerMatch$, cause routerMatch$ updates shouldLoad$ that then loads the page
     // setting isLoaded$ to true
-    routeProps.uid$(location.uidCounter$())
-    route$(location.getRoute(path))
-    routeProps.params$(location.getParams(path))
-    routeProps.state$(location.state$())
-    routeProps.url$(location.url$())
-  })
-
-  useTask(({ track }) => {
-    const [route, locationPath] = track(() => [route$(), location.path$(), shouldUpdateUidWhenPathMatches$()])
-    if (!route) return
-    let matchedPath
-    if (!(matchedPath = paths$().find(v => v === locationPath))) return
-
-    routeProps.path$(matchedPath)
+    routeProps.route$({
+      ...loc.route$(),
+      params: routerMatch.params
+    })
+    routerMatch$(routerMatch)
   })
 
   useTask(async ({ track }) => {
     const [shouldLoad, isLoaded] = track(() => [shouldLoad$(), isLoaded$()])
     if (!shouldLoad || isLoaded) return
 
-    await route$().handler.loadModule()
+    await routerMatch$().handler.loadModule()
     isLoaded$(true)
   })
 
-  useTask(async ({ track }) => {
-    const [isLoaded, currentUid] = track(() => [
-      isLoaded$(),
-      location.currentUid$(),
-      shouldUpdateUidWhenPathMatches$()
-    ])
-
-    if (!isLoaded) return
-    if (!wasAlreadyLoaded$()) {
-      wasAlreadyLoaded$(true)
-      return
+  const { templateStrings$ } = useStore(() => ({
+    // uhtml needs this to be frozen for template caching
+    // i.e. return this.h([`<${routerMatch$().handler.tag} props=`, ' />'], routeProps)
+    // would make rendered html to blink on each render
+    stableArrayLiteral$: [],
+    templateStrings$ () {
+      this.stableArrayLiteral$().length = 0
+      this.stableArrayLiteral$().push(
+        `<${routerMatch$().handler.tag} props=`,
+        ' />'
+      )
+      return this.stableArrayLiteral$()
     }
-    if (!shouldUpdateUidWhenPathMatches$() || routeProps.path$() !== location.path$()) return
+  }))
 
-    // to use with this check below: Math.abs(routeProps.uid$() - location.currentUid$()) > maxVisibleDistance$()
-    routeProps.uid$(currentUid)
-  })
-
-  // TODO: fix this; if uncommenting, all routes blink when navigating
-  // e.g. wasAlreadyLoaded$ gets reinitialized to false on navigation
   if (
-    !isLoaded$() // ||
-    // (
-    //   routeProps.uid$() &&
-    //   Math.abs(routeProps.uid$() - location.currentUid$()) > maxVisibleDistance$()
-    // )
+    !isLoaded$() ||
+    (
+      routeProps.route$().uid &&
+      Math.abs(routeProps.route$().uid - loc.route$().uid) > maxVisibleDistance$()
+    )
   ) return
 
-  // dynamic tag doesn't work with uhtml: return this.h`<${tag} props=${{}} />`
-  return this.h([`<${route$().handler.tag} props=`, ' />'], routeProps)
+  return this.h(templateStrings$(), routeProps)
 })

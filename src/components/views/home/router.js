@@ -12,7 +12,7 @@ f(function homeRouter () {
   useLocation(router)
 
   return this.h`
-    ${this.h({ key: '/' })`<a-route props=${{ debug: '[h]/', path: '/' }} />`}
-    <a-route props=${{ debug: '[h]/upload', path: '/upload' }} />
+    <a-route props=${{ path: '/' }} />
+    <a-route props=${{ path: '/upload' }} />
   `
 })
