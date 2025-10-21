@@ -3,13 +3,15 @@ import globalCssString from '#assets/styles/global.css'
 import { f } from '#f'
 import {
   cssStrings,
-  cssClasses
+  cssClasses,
+  cssVars
 } from '#assets/styles/theme.js'
 import '#components/router.js' // ensures <a-router> is defined
+import '#shared/toast.js' // ensures <a-toast> is defined
 
 document.head.insertAdjacentHTML('beforeend', `<style>${resetCssString}${globalCssString}</style>`)
 
-if (window.IS_DEVELOPMENT) {
+if (IS_DEVELOPMENT) {
   new EventSource('/esbuild').addEventListener('change', () => location.reload())
 }
 
@@ -24,9 +26,13 @@ f(function aApp () {
       <style>${/* css */`
         #app {
           &${cssStrings.defaultTheme}
+
+          height: 100%;
+          background-color: ${cssVars.colors.bg};
         }
       `}</style>
       <a-router />
+      <a-toast />
     </div>
   `
 })

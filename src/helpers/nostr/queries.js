@@ -1,7 +1,8 @@
 import nostrRelays, { seedRelays, freeRelays } from '#services/nostr-relays.js'
 import { npubEncode } from '#helpers/nostr/nip19.js'
-import { getSvgAvatar } from 'avatar'
-import { getRandomId, maybeUnref } from 'helpers/misc.js'
+import { getSvgAvatar } from '#helpers/avatar.js'
+import { getRandomId } from '#helpers/misc.js'
+import { maybeUnref } from '#helpers/timer.js'
 
 const profilesByPubkey = {}
 export async function getProfile (pubkey,
@@ -77,7 +78,9 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
         .filter(Boolean)
         .map(t => t[1]?.trim?.())[0] ||
       eventContent.picture?.trim?.() ||
-      await _getSvgAvatar(event.pubkey),
+      `data:image/svg+xml;charset=utf-8,${
+        window.encodeURIComponent(await _getSvgAvatar(event.pubkey))
+      }`,
     npub: npubEncode(event.pubkey),
     meta: {
       events: [event]

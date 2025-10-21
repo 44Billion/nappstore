@@ -4,15 +4,15 @@ import '#components/route.js'
 import useLocation from '#hooks/use-location.js'
 
 const router = new Router({
-  '/(.*)': { tag: 'napps-index', loadModule: () => import('#views/napps/index/index.js') },
-  '/upload': { tag: 'napps-upload', loadModule: () => import('#views/napps/upload/index.js') }
+  '/upload': { path: '/upload', tag: 'napps-upload', loadModule: () => import('#views/napps/upload/index.js') },
+  '/(.*)': { path: '/(.*)', tag: 'napps-index', loadModule: () => import('#views/napps/index/index.js') }
 })
 
 f(function homeRouter () {
   useLocation(router)
 
   return this.h`
-    <a-route props=${{ path: '/' }} />
+    <a-route props=${{ path: '/(.*)' }} />
     <a-route props=${{ path: '/upload' }} />
   `
 })

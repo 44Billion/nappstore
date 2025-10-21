@@ -2,20 +2,29 @@ import { useGlobalStore, useClosestStore, useTask } from '#f'
 
 export function useLocationInit (router) {
   const {
+    route$,
     onPopState,
     ...globalLoc
   // initialized only once, no matter how many times useLocation() is called
   } = useGlobalStore('_f_useLocation', () => {
     function getRoute ({ shouldUpdateUrl = true, isInit = false }) {
-      let url, path
+      let url
       if (shouldUpdateUrl) {
-        url = new URL(window.location)
-        path = url.pathname.replace(/(?<!^)\/+$/, '')
+        const _url = new URL(window.location)
+        // remove trailing /
+        // updating pathname updates url.href too
+        _url.pathname = _url.pathname.replace(/(?<!^)\/+$/, '')
+        let k
+        url = {}
+        for (k in _url) url[k] = _url[k]
+        // fix JSON.stringify issues with url when storing in f's hook state manager
+        url.toString = () => url.href; delete url.toJSON
+        url.searchParams = Object.fromEntries(_url.searchParams.entries())
       } else {
-        ({ url, path } = this.route$())
+        ({ url } = this.route$())
       }
       const currentUid = history.state?._f_useLocation_uid ??
-        (isInit ? 0 : this.uidCounter$())
+        (isInit ? 0 : (this?.uidCounter$() ?? 0))
       const state = history.state
         ? ('_f_useLocation_uid' in history.state
             ? history.state
@@ -24,7 +33,6 @@ export function useLocationInit (router) {
       return {
         uid: currentUid,
         url,
-        path,
         state
       }
     }
@@ -78,14 +86,19 @@ export function useLocationInit (router) {
   })
   const closestLoc = useClosestStore('_f_useLocation', () => ({
     ...globalLoc,
-    // Note these computed property would be stale for a moment
-    // if you're tracking one or the other or this.route$ on a useTask
-    // that's why we won't add them
-    // routerMatch$ () { return router.find(this.path$()) },
-    // params$ () { return this.routerMatch$().params ?? {} },
-    // Handler and params
-    getRouterMatch (path = this.route$().path) { return router.find(path) },
-    getParams (path) { return this.getRouterMatch(path).params ?? {} }
+    route$ () {
+      const route = route$()
+      const { params, handler } = router.find(route.url.pathname) || {}
+      // all these fields must change together to avoid
+      // stale data if one were to track different fields separately
+      return {
+        ...route,
+        params,
+        handler
+      }
+    },
+    // => null | { handler, params = {} }
+    getRouterMatch (path = this.route$().url.pathname) { return router.find(path) }
   }))
   useNavigateInit(onPopState)
   return closestLoc

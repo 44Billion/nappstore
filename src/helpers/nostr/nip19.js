@@ -47,9 +47,11 @@ export function appDecode (entity) {
   if (!tlv[0]?.[0]) throw new Error('Missing deduplication tag')
   if (!tlv[2]?.[0]) throw new Error('Missing author pubkey')
   if (tlv[2][0].length !== 32) throw new Error('Author pubkey should be 32 bytes')
+  const dTag = textDecoder.decode(tlv[0][0])
+  if (!isNostrAppDTagSafe(dTag)) { throw new Error('Invalid deduplication tag') }
 
   return {
-    dTag: textDecoder.decode(tlv[0][0]),
+    dTag,
     pubkey: bytesToBase16(tlv[2][0]),
     kind: kindByChannel[channel],
     channel,

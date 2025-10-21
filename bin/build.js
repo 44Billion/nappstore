@@ -27,8 +27,14 @@ const ctx = await esbuild.context({
     '.webp': 'dataurl'
   },
   ...(isDev
-    ? { define: { 'window.IS_DEVELOPMENT': JSON.stringify(true), _F_SHOULD_RESTORE_STATE_ON_TAB_RELOAD: JSON.stringify(true) } }
-    : { define: { 'window.IS_PRODUCTION': JSON.stringify(true) } }),
+    ? {
+        define: {
+          IS_DEVELOPMENT: JSON.stringify(true), IS_PRODUCTION: JSON.stringify(false)
+          // useLocation or route component not working with state restoration on tab reload
+          // 'globalThis._F_SHOULD_RESTORE_STATE_ON_TAB_RELOAD': JSON.stringify(true)
+        }
+      }
+    : { define: { IS_DEVELOPMENT: JSON.stringify(false), IS_PRODUCTION: JSON.stringify(true) } }),
   entryPoints: [
     `${dirname}/../src/components/app.js`,
     `${dirname}/../src/assets/html/index.html`, // will use "copy" loader

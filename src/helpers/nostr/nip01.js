@@ -1,7 +1,7 @@
 import { getPublicKey as getPublicKeyFromUint8Array } from 'nostr-tools/pure'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { bytesToBase16, base16ToBytes } from 'helpers/misc.js'
+import { bytesToBase16, base16ToBytes } from '#helpers/base16.js'
 
 // https://github.com/paulmillr/noble-secp256k1/blob/b032053763c0d4ba107c18fee28344f64242b075/index.js#L457
 export function generatePrivateKey () {

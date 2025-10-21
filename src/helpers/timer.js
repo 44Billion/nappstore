@@ -1,4 +1,4 @@
 export function maybeUnref (timer) {
-  if (typeof window === 'undefined') timer.unref()
+  timer.unref?.()
   return timer
 }
