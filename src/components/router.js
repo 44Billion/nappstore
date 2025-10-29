@@ -14,7 +14,7 @@ export const router = new Router({
   // '/:npub(npub1.*)': { tag: 'profiles-show', loadModule: () => import('#views/profiles/show/index.js') }
 })
 
-f(function aRouter () {
+f('aRouter', function () {
   useLocation(router)
 
   return this.h`

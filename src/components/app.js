@@ -15,7 +15,7 @@ if (IS_DEVELOPMENT) {
   new EventSource('/esbuild').addEventListener('change', () => location.reload())
 }
 
-f(function aApp () {
+f('aApp', function () {
   return this.h`
     <div
       id='app'

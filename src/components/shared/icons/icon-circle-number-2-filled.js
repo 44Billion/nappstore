@@ -1,7 +1,7 @@
 import { f, useStore } from '#f'
 import '#shared/svg.js'
 
-f(function iconCircleNumber2Filled () {
+f('iconCircleNumber2Filled', function () {
   // https://tabler.io/icons/icon/circle-number-1
   const store = useStore({
     path$: [

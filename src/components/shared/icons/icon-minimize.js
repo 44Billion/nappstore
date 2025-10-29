@@ -1,7 +1,7 @@
 import { f, useStore } from '#f'
 import '#shared/svg.js'
 
-f(function iconMinimize () {
+f('iconMinimize', function () {
   // https://tabler.io/icons/icon/minimize
   const store = useStore({
     path$: [

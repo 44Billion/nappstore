@@ -8,6 +8,7 @@
   "scripts": {
     "start": "NODE_ENV=development node bin/build.js",
     "build": "NODE_ENV=production node bin/build.js",
+    "serve": "python3 server.py",
     "test": "node --test 'tests/**/*.test.js'",
     "test:only": "node --test --test-only 'tests/**/*.test.js'"
   },
@@ -38,7 +39,7 @@
     "@scure/base": "^2.0.0",
     "nmmr": "^1.0.7",
     "nostr-tools": "^2.16.2",
-    "thenameisf": "^1.0.1",
+    "thenameisf": "^1.0.3",
     "url-router": "^13.0.0"
   }
 }

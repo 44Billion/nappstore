@@ -12,7 +12,7 @@ import '#shared/avatar.js'
 import '#shared/app-icon.js'
 
 // Show a user's profile and their uploaded apps
-f(function profilesShow () {
+f('profilesShow', function () {
   const { params$ } = useClosestStore('<a-route>')
   const { showToast } = useToast()
   const store = useStore(() => ({

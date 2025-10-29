@@ -20,7 +20,7 @@ import '#shared/app-icon.js'
 import '#shared/icons/icon-circle-number-1-filled.js'
 import '#shared/icons/icon-circle-number-2-filled.js'
 
-f(function nappsUpload () {
+f('nappsUpload', function () {
   const { showToast } = useToast()
   const store = useStore(() => ({
     selectedFolder$: null,

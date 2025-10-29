@@ -1,7 +1,7 @@
 import { f, useStore } from '#f'
 import '#shared/svg.js'
 
-f(function iconMaximize () {
+f('iconMaximize', function () {
   // https://tabler.io/icons/icon/maximize
   const store = useStore({
     path$: [

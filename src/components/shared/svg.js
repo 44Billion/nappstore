@@ -14,7 +14,7 @@ import { f, useStore, useTask } from '#f'
 // A descriptive aria-label can be used to allow screen readers
 // to announce an icon if there is no visual label to accompany it.
 const noIcon = 'M0 0h24v24H0V0zm2 2v20h20V2H2z'
-f(function aSvg () {
+f('aSvg', function () {
   const store = useStore(() => {
     const it = this
     return {

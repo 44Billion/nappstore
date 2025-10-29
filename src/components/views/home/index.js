@@ -8,7 +8,7 @@ import '#shared/avatar.js'
 import '#views/home/tabs.js'
 import '#views/home/router.js'
 
-f(function aHome () {
+f('aHome', function () {
   // const loc = useLocation()
   const store = useStore(() => ({
     userPubkey$: null,

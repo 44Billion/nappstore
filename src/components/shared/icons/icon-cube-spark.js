@@ -1,7 +1,7 @@
 import { f, useStore } from '#f'
 import '#shared/svg.js'
 
-f(function iconCubeSpark () {
+f('iconCubeSpark', function () {
   // https://tabler.io/icons/icon/cube-spark
   const store = useStore({
     path$: [

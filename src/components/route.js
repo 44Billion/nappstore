@@ -6,7 +6,7 @@ import '#views/home/tabs.js'
 // shouldPreload($)=true|false,
 // path($)='/some-path'|paths($)=['/some-path', ...]
 // }
-f(function aRoute () {
+f('aRoute', function () {
   const loc = useLocation()
   let {
     isLoaded$,

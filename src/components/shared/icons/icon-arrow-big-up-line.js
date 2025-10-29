@@ -1,7 +1,7 @@
 import { f, useStore } from '#f'
 import '#shared/svg.js'
 
-f(function iconArrowBigUpLine () {
+f('iconArrowBigUpLine', function () {
   // https://tabler.io/icons/icon/arrow-big-up-line
   const store = useStore({
     path$: [

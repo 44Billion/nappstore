@@ -40,7 +40,7 @@ export function removeToast (toastStore, id) {
 }
 
 // Toast container component
-f(function aToast () {
+f('aToast', function () {
   const toastStore = useGlobalStore('<a-toast>', () => ({
     toasts$: []
   }))

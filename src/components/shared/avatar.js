@@ -9,7 +9,7 @@ import useWebStorage from '#hooks/use-web-storage.js'
 import lru from '#services/lru.js'
 
 // wrap it with a div setting width/height, border-radius and background-color
-f(function aAvatar () {
+f('aAvatar', function () {
   const pk$ = useSignal(this.props.pk$ ?? this.props.pk)
   const storage = useWebStorage(localStorage)
   const cache$ = useSignal(this.props.profileCache$ ?? this.props.profileCache$ ?? {

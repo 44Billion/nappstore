@@ -2,7 +2,7 @@ import { f, useComputed, useSignal, useTask } from '#f'
 import useWebStorage from '#hooks/use-web-storage.js'
 import lru from '#services/lru.js'
 
-f(function appIcon () {
+f('appIcon', function () {
   const storage = useWebStorage(localStorage)
   const appId$ = useComputed(() => this.props.app$().id)
   const appIndex$ = useComputed(() => this.props.app$().index ?? '?')

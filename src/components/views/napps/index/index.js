@@ -12,7 +12,7 @@ const PRIMAL_RELAY = 'wss://relay.primal.net'
 const APPS_PER_PAGE = 20
 
 // Lazy lists all apps
-f(function nappsIndex () {
+f('nappsIndex', function () {
   const store = useStore(() => ({
     apps$: [],
     isLoading$: false,

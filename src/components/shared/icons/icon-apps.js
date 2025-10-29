@@ -1,7 +1,7 @@
 import { f, useStore } from '#f'
 import '#shared/svg.js'
 
-f(function iconApps () {
+f('iconApps', function () {
   // https://tabler.io/icons/icon/apps
   const store = useStore({
     path$: [

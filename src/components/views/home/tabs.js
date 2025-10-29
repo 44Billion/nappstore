@@ -4,7 +4,7 @@ import useLocation from '#hooks/use-location.js'
 import '#shared/icons/icon-cube-spark.js'
 import '#shared/icons/icon-arrow-big-up-line.js'
 
-f(function homeTabs () {
+f('homeTabs', function () {
   const loc = useLocation()
   const currentPath$ = useComputed(() => loc.route$().url.pathname)
 

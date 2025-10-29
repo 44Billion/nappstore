@@ -8,7 +8,7 @@ const router = new Router({
   '/(.*)': { path: '/(.*)', tag: 'napps-index', loadModule: () => import('#views/napps/index/index.js') }
 })
 
-f(function homeRouter () {
+f('homeRouter', function () {
   useLocation(router)
 
   return this.h`

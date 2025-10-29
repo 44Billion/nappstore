@@ -1,7 +1,7 @@
 import { f, useStore } from '#f'
 import '#shared/svg.js'
 
-f(function iconExclamationMark () {
+f('iconExclamationMark', function () {
   // https://tabler.io/icons/icon/exclamation-mark
   const store = useStore({
     path$: [
