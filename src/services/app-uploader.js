@@ -9,6 +9,8 @@ import { isNostrAppDTagSafe, deriveNostrAppDTag } from '#helpers/app.js'
 
 const PRIMAL_RELAY = 'wss://relay.primal.net'
 const CHUNK_SIZE = 51000
+const RATE_LIMIT_BACKOFF_STEP = 2000
+const MAX_UPLOAD_RETRIES = 5
 
 // Stream file to chunks
 async function * streamToChunks (stream, chunkSize) {
@@ -30,6 +32,8 @@ async function * streamToChunks (stream, chunkSize) {
   }
 }
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
 export async function getDTag (fileList, folderName) {
   folderName ??= fileList[0].webkitRelativePath.split('/')[0].trim()
   if (isNostrAppDTagSafe(folderName)) return folderName
@@ -48,7 +52,6 @@ export async function uploadApp (fileList, dTag, onProgress) {
   const signer = window.nostr
   const pubkey = await maybePeekPublicKey(signer)
 
-  // Get user's write relays
   let writeRelays
   try {
     const relays = await getRelays(pubkey)
@@ -58,7 +61,6 @@ export async function uploadApp (fileList, dTag, onProgress) {
     writeRelays = []
   }
 
-  // Add Primal relay if not already there
   if (!writeRelays.includes(PRIMAL_RELAY)) {
     writeRelays.push(PRIMAL_RELAY)
   }
@@ -67,16 +69,35 @@ export async function uploadApp (fileList, dTag, onProgress) {
     throw new Error('No write relays found')
   }
 
+  const totalFiles = fileList.length
+  const progressState = {
+    filesProgress: 0,
+    totalFiles,
+    chunkProgress: 0,
+    status: ''
+  }
+  // Maintain a single progress object so UI keeps previous fields when only one changes.
+  const reportProgress = (patch = {}) => {
+    if (typeof onProgress !== 'function') return
+    Object.assign(progressState, patch)
+    onProgress({ ...progressState })
+  }
+  reportProgress({ totalFiles })
+
+  const throttleState = { pause: 0 }
   const fileMetadata = []
   let fileIndex = 0
-  const totalFiles = fileList.length
 
   for (const file of fileList) {
     fileIndex++
-    onProgress({ filesProgress: fileIndex, totalFiles, chunkProgress: 0 })
-
     const filename = file.webkitRelativePath?.split('/').slice(1).join('/') || file.name
     const mimeType = file.type || 'application/octet-stream'
+
+    reportProgress({
+      filesProgress: fileIndex,
+      chunkProgress: 0,
+      status: `Preparing "${filename}"`
+    })
 
     const fileMetadataEntry = await uploadFileWithNMMR({
       file,
@@ -84,27 +105,32 @@ export async function uploadApp (fileList, dTag, onProgress) {
       mimeType,
       signer,
       writeRelays,
-      onProgress: (chunkProgress) => {
-        onProgress({ filesProgress: fileIndex, totalFiles, chunkProgress })
-      }
+      reportProgress,
+      throttleState
     })
 
     fileMetadata.push(fileMetadataEntry)
+    reportProgress({ status: `Uploaded "${filename}"` })
   }
 
-  // Upload bundle
+  reportProgress({ status: 'Publishing bundle metadata...' })
+
   await uploadBundle({
     dTag,
     fileMetadata,
     signer,
-    writeRelays
+    writeRelays,
+    throttleState,
+    reportProgress
   })
+
+  reportProgress({ status: 'Upload complete' })
 
   return { dTag, fileMetadata }
 }
 
 // Upload file using NMMR for proper Merkle tree hashing
-async function uploadFileWithNMMR ({ file, filename, mimeType, signer, writeRelays, onProgress }) {
+async function uploadFileWithNMMR ({ file, filename, mimeType, signer, writeRelays, reportProgress, throttleState }) {
   const nmmr = new NMMR()
   const stream = file.stream()
 
@@ -126,13 +152,19 @@ async function uploadFileWithNMMR ({ file, filename, mimeType, signer, writeRela
   let currentChunkIndex = 0
   for await (const chunk of nmmr.getChunks()) {
     currentChunkIndex++
-    onProgress(Math.round((currentChunkIndex / chunkCount) * 100))
+    const chunkPercent = Math.round((currentChunkIndex / chunkCount) * 100)
+    reportProgress?.({ chunkProgress: chunkPercent, status: `Uploading chunk ${currentChunkIndex}/${chunkCount} for "${filename}"` })
 
     const dTag = chunk.x
     const currentCtag = `${chunk.rootX}:${chunk.index}`
 
     // Get previous ctags for this file
-    const { otherCtags } = await getPreviousCtags(dTag, currentCtag, writeRelays, signer)
+    const { otherCtags, hasCurrentCtag } = await getPreviousCtags(dTag, currentCtag, writeRelays, signer)
+
+    if (hasCurrentCtag) {
+      reportProgress?.({ chunkProgress: chunkPercent, status: `Chunk ${currentChunkIndex}/${chunkCount} already uploaded, skipping "${filename}"` })
+      continue
+    }
 
     const encoded = new Base93Encoder().update(chunk.contentBytes).getEncoded()
 
@@ -149,7 +181,12 @@ async function uploadFileWithNMMR ({ file, filename, mimeType, signer, writeRela
     }
 
     const signedEvent = await signer.signEvent(event)
-    await sendEventToRelays(signedEvent, writeRelays, 10000)
+    await sendEventToRelays(signedEvent, writeRelays, {
+      timeout: 15000,
+      throttleState,
+      reportStatus: status => reportProgress?.({ status: `${status} (${filename})` })
+    })
+    reportProgress?.({ chunkProgress: chunkPercent, status: `Uploaded chunk ${currentChunkIndex}/${chunkCount} for "${filename}"` })
   }
 
   return {
@@ -197,21 +234,111 @@ async function getPreviousCtags (dTagValue, currentCtagValue, writeRelays, signe
   }
 }
 
-// Send event to relays
-async function sendEventToRelays (event, relays, timeout) {
-  const { errors, success } = await nostrRelays.sendEvent(event, relays, timeout)
-
-  if (errors.length > 0) {
-    console.log(`Errors publishing to relays: ${errors.map(e => `${e.relay}: ${e.reason?.message || e.reason}`).join(', ')}`)
+// Send event to relays with rate limit awareness
+async function sendEventToRelays (event, relays, {
+  timeout = 10000,
+  throttleState,
+  reportStatus,
+  trailingPause = true
+} = {}) {
+  if (!Array.isArray(relays) || relays.length === 0) {
+    throw new Error('No relays available to publish event')
   }
 
-  if (!success) {
-    throw new Error(`Failed to publish to any relays: ${errors.map(e => `${e.relay}: ${e.reason?.message || e.reason}`).join(', ')}`)
+  await throttledSendEvent({
+    event,
+    relays,
+    timeout,
+    pauseState: throttleState ?? { pause: 0 },
+    reportStatus,
+    trailingPause
+  })
+}
+
+const formatReason = (reason) => {
+  if (!reason) return 'unknown error'
+  if (typeof reason === 'string') return reason
+  if (reason instanceof Error) return reason.message
+  if (typeof reason.message === 'string') return reason.message
+  try {
+    return JSON.stringify(reason)
+  } catch (_) {
+    return 'unknown error'
   }
 }
 
+// Retries publishing events while backing off when relays respond with rate limits.
+async function throttledSendEvent ({
+  event,
+  relays,
+  timeout,
+  pauseState,
+  reportStatus,
+  retries = 0,
+  maxRetries = MAX_UPLOAD_RETRIES,
+  minSuccessfulRelays = 1,
+  trailingPause = false
+}) {
+  const pause = pauseState.pause ?? 0
+
+  const { errors, success } = await nostrRelays.sendEvent(event, relays, timeout)
+
+  if (errors.length === 0) {
+    if (pause && trailingPause) await sleep(pause)
+    return
+  }
+
+  const partitioned = errors.reduce((acc, current) => {
+    const message = formatReason(current.reason)
+    if (message.startsWith('rate-limited:')) {
+      acc.rateLimited.push({ relay: current.relay, message })
+    } else {
+      acc.unretryable.push({ relay: current.relay, message })
+    }
+    return acc
+  }, { rateLimited: [], unretryable: [] })
+
+  if (partitioned.unretryable.length > 0 && reportStatus) {
+    reportStatus(`Relay errors: ${partitioned.unretryable.map(err => `${err.relay} (${err.message})`).join(', ')}`)
+  }
+
+  const maybeSuccessfulRelays = relays.length - partitioned.unretryable.length
+  if (retries >= maxRetries || maybeSuccessfulRelays < minSuccessfulRelays || (!success && partitioned.rateLimited.length === 0)) {
+    const details = errors.map(err => `${err.relay}: ${formatReason(err.reason)}`).join(', ')
+    throw new Error(`Failed to publish to relays: ${details}`)
+  }
+
+  if (partitioned.rateLimited.length === 0) {
+    if (pause && trailingPause) await sleep(pause)
+    return
+  }
+
+  const newPause = pause + RATE_LIMIT_BACKOFF_STEP
+  pauseState.pause = newPause
+  if (reportStatus) {
+    reportStatus(`Rate limited by ${partitioned.rateLimited.length} relay(s). Retrying in ${newPause}ms...`)
+  }
+
+  await sleep(newPause)
+
+  const nextMinSuccessfulRelays = Math.max(0, minSuccessfulRelays - (relays.length - partitioned.rateLimited.length))
+  const nextRelays = partitioned.rateLimited.map(err => err.relay)
+
+  await throttledSendEvent({
+    event,
+    relays: nextRelays,
+    timeout,
+    pauseState,
+    reportStatus,
+    retries: retries + 1,
+    maxRetries,
+    minSuccessfulRelays: nextMinSuccessfulRelays,
+    trailingPause
+  })
+}
+
 // Upload bundle metadata
-async function uploadBundle ({ dTag, fileMetadata, signer, writeRelays }) {
+async function uploadBundle ({ dTag, fileMetadata, signer, writeRelays, throttleState, reportProgress }) {
   const bundle = {
     kind: 37448,
     tags: [
@@ -223,5 +350,9 @@ async function uploadBundle ({ dTag, fileMetadata, signer, writeRelays }) {
   }
 
   const signedBundle = await signer.signEvent(bundle)
-  await sendEventToRelays(signedBundle, writeRelays, 10000)
+  await sendEventToRelays(signedBundle, writeRelays, {
+    timeout: 15000,
+    throttleState,
+    reportStatus: status => reportProgress?.({ status })
+  })
 }

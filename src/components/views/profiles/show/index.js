@@ -266,7 +266,7 @@ f('profilesShow', function () {
             display: 'flex',
             justifyContent: 'center',
             padding: '20px',
-            color: cssVars.colors.mgFont
+            color: cssVars.colors.fg2
           }}>
             Loading profile...
           </div>
@@ -307,7 +307,7 @@ f('profilesShow', function () {
               <div style=${{
                 fontSize: '24px',
                 fontWeight: 'bold',
-                color: cssVars.colors.mgFont,
+                color: cssVars.colors.fg2,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap'
@@ -320,7 +320,7 @@ f('profilesShow', function () {
     ? this.h`
                 <div style=${{
                   fontSize: '14px',
-                  color: cssVars.colors.mgFont,
+                  color: cssVars.colors.fg2,
                   lineHeight: '1.5',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word'
@@ -343,7 +343,7 @@ f('profilesShow', function () {
                     backgroundColor: isFollowing
                       ? cssVars.colors.mg
                       : cssVars.colors.primary,
-                    color: isFollowing ? cssVars.colors.mgFont : 'white',
+                    color: isFollowing ? cssVars.colors.fg2 : 'white',
                     border: isFollowing
                       ? '2px solid ' + cssVars.colors.mgBorder
                       : 'none',
@@ -382,7 +382,7 @@ f('profilesShow', function () {
         <div style=${{
           fontSize: '20px',
           fontWeight: 'bold',
-          color: cssVars.colors.mgFont,
+          color: cssVars.colors.fg2,
           paddingBottom: '8px',
           borderBottom: '2px solid ' + cssVars.colors.mgBorder
         }}>
@@ -396,7 +396,7 @@ f('profilesShow', function () {
             display: 'flex',
             justifyContent: 'center',
             padding: '40px',
-            color: cssVars.colors.mgFont
+            color: cssVars.colors.fg2
           }}>
             Loading apps...
           </div>
@@ -407,7 +407,7 @@ f('profilesShow', function () {
             display: 'flex',
             justifyContent: 'center',
             padding: '40px',
-            color: cssVars.colors.mgFont,
+            color: cssVars.colors.fg2,
             fontSize: '14px'
           }}>
             No apps uploaded yet
@@ -459,7 +459,7 @@ f('profilesShow', function () {
                     <div style=${{
                       fontSize: '14px',
                       fontWeight: 'bold',
-                      color: cssVars.colors.mgFont,
+                      color: cssVars.colors.fg2,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap'
@@ -468,7 +468,7 @@ f('profilesShow', function () {
                     </div>
                     <div style=${{
                       fontSize: '12px',
-                      color: cssVars.colors.mgFont,
+                      color: cssVars.colors.fg2,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       display: '-webkit-box',

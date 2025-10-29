@@ -26,7 +26,7 @@ f('nappsUpload', function () {
     selectedFolder$: null,
     isUploading$: false,
     uploadError$: null,
-    uploadProgress$: { filesProgress: 0, totalFiles: 0, chunkProgress: 0 },
+    uploadProgress$: { filesProgress: 0, totalFiles: 0, chunkProgress: 0, status: '' },
     myApps$: [],
     isLoadingApps$: false,
     // myApps$: [
@@ -81,7 +81,7 @@ f('nappsUpload', function () {
 
       store.isUploading$(true)
       store.uploadError$(null)
-      store.uploadProgress$({ filesProgress: 0, totalFiles: 0, chunkProgress: 0 })
+      store.uploadProgress$({ filesProgress: 0, totalFiles: 0, chunkProgress: 0, status: '' })
 
       try {
         const indexFile = findIndexFile(files)
@@ -396,7 +396,7 @@ f('nappsUpload', function () {
               ? this.h`
                     <div style=${{
                       fontSize: '12px',
-                      color: cssVars.colors.mgFont,
+                      color: cssVars.colors.fg2,
                       padding: '8px',
                       backgroundColor: cssVars.colors.bg,
                       borderRadius: '4px'
@@ -431,7 +431,7 @@ f('nappsUpload', function () {
                       flexDirection: 'column',
                       gap: '8px'
                     }}>
-            <div style=${{ fontSize: '12px', color: cssVars.colors.mgFont }}>
+            <div style=${{ fontSize: '12px', color: cssVars.colors.fg2 }}>
               Uploading... ${uploadProgress.filesProgress}/${uploadProgress.totalFiles} files
             </div>
             <div style=${{
@@ -451,8 +451,17 @@ f('nappsUpload', function () {
             ${
               uploadProgress.chunkProgress > 0
                 ? this.h`
-                          <div style=${{ fontSize: '11px', color: cssVars.colors.mgFont }}>
+                          <div style=${{ fontSize: '11px', color: cssVars.colors.fg2 }}>
                             File progress: ${uploadProgress.chunkProgress}%
+                          </div>
+                        `
+                : ''
+            }
+            ${
+              uploadProgress.status
+                ? this.h`
+                          <div style=${{ fontSize: '11px', color: cssVars.colors.fgInfo }}>
+                            ${uploadProgress.status}
                           </div>
                         `
                 : ''
