@@ -111,7 +111,7 @@ async function uploadFileWithNMMR ({ file, filename, mimeType, signer, writeRela
   // Read file and build NMMR tree
   let chunkCount = 0
   for await (const chunk of streamToChunks(stream, CHUNK_SIZE)) {
-    nmmr.append(chunk)
+    await nmmr.append(chunk)
     chunkCount++
   }
 
