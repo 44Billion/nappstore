@@ -12,24 +12,25 @@ const CHUNK_SIZE = 51000
 const RATE_LIMIT_BACKOFF_STEP = 2000
 const MAX_UPLOAD_RETRIES = 5
 
-// Stream file to chunks
+// Receives a stream and yields Uint8Array binary chunks of a given size.
+// The last chunk may be smaller than the chunkSize.
 async function * streamToChunks (stream, chunkSize) {
-  const reader = stream.getReader()
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
+  let buffer = new Uint8Array(0)
 
-      let offset = 0
-      while (offset < value.length) {
-        const chunk = value.slice(offset, offset + chunkSize)
-        offset += chunkSize
-        yield chunk
-      }
+  for await (const chunk of stream) {
+    const newBuffer = new Uint8Array(buffer.length + chunk.length)
+    newBuffer.set(buffer)
+    newBuffer.set(chunk, buffer.length)
+    buffer = newBuffer
+
+    while (buffer.length >= chunkSize) {
+      const chunkToYield = buffer.slice(0, chunkSize)
+      buffer = buffer.slice(chunkSize)
+      yield chunkToYield
     }
-  } finally {
-    reader.releaseLock()
   }
+
+  if (buffer.length > 0) yield buffer
 }
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
@@ -152,6 +153,7 @@ async function uploadFileWithNMMR ({ file, filename, mimeType, signer, writeRela
   let currentChunkIndex = 0
   for await (const chunk of nmmr.getChunks()) {
     currentChunkIndex++
+    if (IS_DEVELOPMENT) console.log(`Uploading: [${currentChunkIndex}/${chunkCount}] ${filename}`)
     const chunkPercent = Math.round((currentChunkIndex / chunkCount) * 100)
     reportProgress?.({ chunkProgress: chunkPercent, status: `Uploading chunk ${currentChunkIndex}/${chunkCount} for "${filename}"` })
 
