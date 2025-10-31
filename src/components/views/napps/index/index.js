@@ -186,7 +186,7 @@ f('nappsIndex', function () {
         pubkey: app.pubkey,
         kind: app.kind
       })
-      const url = `https://44billion.net/${encodedApp}`
+      const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
       window.open(url, '_blank')
     }
   }))

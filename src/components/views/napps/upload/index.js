@@ -174,7 +174,7 @@ f('nappsUpload', function () {
           pubkey: app.pubkey,
           kind: 37448
         })
-        const url = `https://44billion.net/${encodedApp}`
+        const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
         await navigator.clipboard.writeText(url)
         showToast('URL copied to clipboard!', 'success', 2000)
       } catch (err) {
@@ -557,7 +557,7 @@ f('nappsUpload', function () {
                       pubkey: app.pubkey,
                       kind: 37448
                     })
-                    const appUrl = `https://44billion.net/${encodedApp}`
+                    const appUrl = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
 
                     return this.h({ key: app.dTag })`
                       <f-to-signals

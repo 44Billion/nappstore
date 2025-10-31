@@ -98,7 +98,7 @@ f('profilesShow', function () {
         pubkey: app.pubkey,
         kind: 37448
       })
-      const url = `https://44billion.net/${encodedApp}`
+      const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
       window.open(url, '_blank')
     }
   }))
