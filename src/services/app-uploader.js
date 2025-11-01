@@ -6,6 +6,7 @@ import nostrRelays from '#services/nostr-relays.js'
 import { getRelays } from '#helpers/nostr/queries.js'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import { isNostrAppDTagSafe, deriveNostrAppDTag } from '#helpers/app.js'
+import { extractHtmlMetadata, findFavicon, findIndexFile } from '#services/app-metadata.js'
 
 const PRIMAL_RELAY = 'wss://relay.primal.net'
 const CHUNK_SIZE = 51000
@@ -43,7 +44,7 @@ export async function getDTag (fileList, folderName) {
 }
 
 // Upload app files to Nostr
-export async function uploadApp (fileList, dTag, onProgress) {
+export async function uploadApp (fileList, dTag, onProgress, stallOptions = {}) {
   dTag ??= await getDTag(fileList)
 
   if (!window.nostr) {
@@ -70,6 +71,39 @@ export async function uploadApp (fileList, dTag, onProgress) {
     throw new Error('No write relays found')
   }
 
+  const resolveRelativePath = (file) => file.webkitRelativePath?.split('/').slice(1).join('/') || file.name
+
+  let stallName = typeof stallOptions.name === 'string' ? stallOptions.name.trim() : undefined
+  let stallSummary = typeof stallOptions.summary === 'string' ? stallOptions.summary.trim() : undefined
+
+  const needsHtmlExtraction = !stallName || !stallSummary
+  if (needsHtmlExtraction) {
+    const indexFile = findIndexFile(fileList)
+    if (indexFile) {
+      try {
+        const htmlContent = await indexFile.text()
+        const { name, description } = extractHtmlMetadata(htmlContent)
+        if (!stallName && name) stallName = name.trim()
+        if (!stallSummary && description) stallSummary = description.trim()
+      } catch (err) {
+        console.log('Error extracting HTML metadata for stall event:', err)
+      }
+    }
+  }
+
+  let iconRelativePath = typeof stallOptions.iconRelativePath === 'string'
+    ? stallOptions.iconRelativePath.trim()
+    : null
+
+  if (!iconRelativePath) {
+    const faviconFile = findFavicon(fileList)
+    if (faviconFile) {
+      iconRelativePath = resolveRelativePath(faviconFile)
+    }
+  }
+
+  let iconMetadata
+
   const totalFiles = fileList.length
   const progressState = {
     filesProgress: 0,
@@ -91,7 +125,7 @@ export async function uploadApp (fileList, dTag, onProgress) {
 
   for (const file of fileList) {
     fileIndex++
-    const filename = file.webkitRelativePath?.split('/').slice(1).join('/') || file.name
+    const filename = resolveRelativePath(file)
     const mimeType = file.type || 'application/octet-stream'
 
     reportProgress({
@@ -111,8 +145,25 @@ export async function uploadApp (fileList, dTag, onProgress) {
     })
 
     fileMetadata.push(fileMetadataEntry)
+    if (!iconMetadata && iconRelativePath && filename === iconRelativePath) {
+      iconMetadata = {
+        rootHash: fileMetadataEntry.rootHash,
+        mimeType: fileMetadataEntry.mimeType
+      }
+    }
     reportProgress({ status: `Uploaded "${filename}"` })
   }
+
+  await maybeUploadStall({
+    dTag,
+    name: stallName,
+    summary: stallSummary,
+    icon: iconMetadata,
+    signer,
+    writeRelays,
+    throttleState,
+    reportProgress
+  })
 
   reportProgress({ status: 'Publishing bundle metadata...' })
 
@@ -234,6 +285,164 @@ async function getPreviousCtags (dTagValue, currentCtagValue, writeRelays, signe
     console.log('Error getting previous ctags:', err)
     return { otherCtags: [], hasCurrentCtag: false }
   }
+}
+
+// Fetch most recent stall event for this app, if any
+async function getPreviousStall (dTagValue, writeRelays, signer) {
+  try {
+    const pubkey = await maybePeekPublicKey(signer)
+    const { result: storedEvents } = await nostrRelays.getEvents({
+      kinds: [37348],
+      authors: [pubkey],
+      '#d': [dTagValue],
+      limit: 1
+    }, writeRelays)
+
+    if (storedEvents.length === 0) return null
+
+    if (storedEvents.length > 1) {
+      storedEvents.sort((a, b) => b.created_at - a.created_at)
+    }
+
+    return storedEvents[0]
+  } catch (err) {
+    console.log('Error getting previous stall:', err)
+    return null
+  }
+}
+
+async function maybeUploadStall ({
+  dTag,
+  name,
+  summary,
+  icon,
+  signer,
+  writeRelays,
+  throttleState,
+  reportProgress
+}) {
+  const trimmedName = typeof name === 'string' ? name.trim() : ''
+  const trimmedSummary = typeof summary === 'string' ? summary.trim() : ''
+  const iconRootHash = icon?.rootHash
+  const iconMimeType = icon?.mimeType
+  const hasMetadata = Boolean(trimmedName) || Boolean(trimmedSummary) || Boolean(iconRootHash)
+  const previous = await getPreviousStall(dTag, writeRelays, signer)
+  if (!previous && !hasMetadata) return false
+
+  const publishStall = async (event) => {
+    reportProgress?.({ status: 'Publishing stall metadata...' })
+    const signedEvent = await signer.signEvent(event)
+    await sendEventToRelays(signedEvent, writeRelays, {
+      timeout: 15000,
+      throttleState,
+      reportStatus: status => reportProgress?.({ status })
+    })
+    return true
+  }
+
+  const createdAt = Math.floor(Date.now() / 1000)
+
+  if (!previous) {
+    const tags = [
+      ['d', dTag],
+      ['c', '*']
+    ]
+
+    let hasIcon = false
+    let hasName = false
+    if (iconRootHash && iconMimeType) {
+      hasIcon = true
+      tags.push(['icon', iconRootHash, iconMimeType])
+      tags.push(['auto', 'icon'])
+    }
+
+    if (trimmedName) {
+      hasName = true
+      tags.push(['name', trimmedName])
+      tags.push(['auto', 'name'])
+    }
+
+    if (trimmedSummary) {
+      tags.push(['summary', trimmedSummary])
+      tags.push(['auto', 'summary'])
+    }
+
+    if (!hasIcon || !hasName) return false
+
+    return publishStall({
+      kind: 37348,
+      tags,
+      content: '',
+      created_at: createdAt
+    })
+  }
+
+  const tags = Array.isArray(previous.tags)
+    ? previous.tags.map(tag => (Array.isArray(tag) ? [...tag] : tag))
+    : []
+  let changed = false
+
+  const ensureTagValue = (key, updater) => {
+    const index = tags.findIndex(tag => Array.isArray(tag) && tag[0] === key)
+    if (index === -1) {
+      const next = updater(null)
+      if (!next) return
+      tags.push(next)
+      changed = true
+      return
+    }
+
+    const next = updater(tags[index])
+    if (!next) return
+    if (!tags[index] || tags[index].some((value, idx) => value !== next[idx])) {
+      tags[index] = next
+      changed = true
+    }
+  }
+
+  ensureTagValue('d', (existing) => {
+    if (existing && existing[1] === dTag) return existing
+    return ['d', dTag]
+  })
+
+  ensureTagValue('c', (existing) => {
+    if (!existing) return ['c', '*']
+    const currentValue = typeof existing[1] === 'string' ? existing[1].trim() : ''
+    if (currentValue === '') return ['c', '*']
+    return existing
+  })
+
+  const hasAuto = (field) => tags.some(tag => Array.isArray(tag) && tag[0] === 'auto' && tag[1] === field)
+
+  if (trimmedName && hasAuto('name')) {
+    ensureTagValue('name', (existing) => {
+      if (existing && existing[1] === trimmedName) return existing
+      return ['name', trimmedName]
+    })
+  }
+
+  if (trimmedSummary && hasAuto('summary')) {
+    ensureTagValue('summary', (existing) => {
+      if (existing && existing[1] === trimmedSummary) return existing
+      return ['summary', trimmedSummary]
+    })
+  }
+
+  if (iconRootHash && iconMimeType && hasAuto('icon')) {
+    ensureTagValue('icon', (existing) => {
+      if (existing && existing[1] === iconRootHash && existing[2] === iconMimeType) return existing
+      return ['icon', iconRootHash, iconMimeType]
+    })
+  }
+
+  if (!changed) return false
+
+  return publishStall({
+    kind: 37348,
+    tags,
+    content: typeof previous.content === 'string' ? previous.content : '',
+    created_at: createdAt
+  })
 }
 
 // Send event to relays with rate limit awareness

@@ -89,6 +89,8 @@ f('nappsUpload', function () {
         const { name, description } = extractHtmlMetadata(htmlContent)
         const faviconFile = findFavicon(files)
         const faviconUrl = await fileToDataUrl(faviconFile)
+        const resolveRelativePath = (file) => file.webkitRelativePath?.split('/').slice(1).join('/') || file.name
+        const faviconRelativePath = faviconFile ? resolveRelativePath(faviconFile) : null
 
         const folderName = files[0].webkitRelativePath.split('/')[0].trim()
         const dTag = await getDTag(files, folderName)
@@ -112,6 +114,10 @@ f('nappsUpload', function () {
 
         await uploadApp(files, dTag, (progress) => {
           store.uploadProgress$(progress)
+        }, {
+          name,
+          summary: description,
+          iconRelativePath: faviconRelativePath
         })
 
         // Get user's pubkey for generating the app URL
