@@ -31,7 +31,9 @@ export async function getProfile (pubkey,
     profile = {
       name: `User#${getRandomId().slice(0, 5)}`,
       about: '',
-      picture: await _getSvgAvatar(pubkey),
+      picture: `data:image/svg+xml;charset=utf-8,${
+        window.encodeURIComponent(await _getSvgAvatar(pubkey))
+      }`,
       npub: npubEncode(pubkey),
       meta: {
         events: []

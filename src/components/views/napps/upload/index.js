@@ -289,9 +289,6 @@ f('nappsUpload', function () {
     ? Math.round((uploadProgress.filesProgress / uploadProgress.totalFiles) * 100)
     : 0
 
-  const borderMgStyle = '2px solid ' + cssVars.colors.mgBorder
-  const borderPrimaryStyle = '2px dashed ' + cssVars.colors.primary
-
   return this.h`
     <div style=${{
         display: 'flex',
@@ -370,8 +367,7 @@ f('nappsUpload', function () {
           gap: '12px',
           padding: '16px',
           backgroundColor: cssVars.colors.bg2,
-          borderRadius: '8px',
-          border: borderMgStyle
+          borderRadius: '8px'
         }}>
           <label style=${{
             display: 'flex',
@@ -380,9 +376,8 @@ f('nappsUpload', function () {
             cursor: 'pointer',
             padding: '20px',
             borderRadius: '6px',
-            border: borderPrimaryStyle,
             backgroundColor: cssVars.colors.bg3,
-            color: cssVars.colors.primary,
+            color: cssVars.colors.fg3,
             fontSize: '14px',
             fontWeight: 'bold',
             transition: 'all 0.2s'
@@ -449,7 +444,7 @@ f('nappsUpload', function () {
             }}>
             <div style=${{
               height: '100%',
-              backgroundColor: cssVars.colors.primary,
+              backgroundColor: cssVars.colors.bgSelected,
               width: overallProgress + '%',
               transition: 'width 0.3s'
             }} />
@@ -510,8 +505,7 @@ f('nappsUpload', function () {
             fontSize: '16px',
             fontWeight: 'bold',
             color: cssVars.colors.fg,
-            paddingBottom: '8px',
-            borderBottom: borderMgStyle
+            paddingBottom: '8px'
           }}>
             My Napps
           </div>
