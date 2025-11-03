@@ -1,3 +1,4 @@
+import '#config/polyfills.js'
 import resetCssString from '#assets/styles/reset.css'
 import globalCssString from '#assets/styles/global.css'
 import { f } from '#f'
