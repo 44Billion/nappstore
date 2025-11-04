@@ -1,3 +1,10 @@
+// Import specific features we want to polyfill
+// import 'core-js/actual/promise/with-resolvers'
+// Add more specific polyfills here as needed
+
+// Or import everything from core-js/actual to polyfill all modern features
+import 'core-js/actual'
+
 if (typeof window !== 'undefined' && typeof window.requestIdleCallback !== 'function') {
   window.requestIdleCallback = function (callback, options) {
     const start = Date.now()
@@ -23,5 +30,21 @@ if (typeof window !== 'undefined' && typeof window.requestIdleCallback !== 'func
 if (typeof window !== 'undefined' && typeof window.cancelIdleCallback !== 'function') {
   window.cancelIdleCallback = function (handle) {
     clearTimeout(handle)
+  }
+}
+
+if (typeof ReadableStream !== 'undefined' && !ReadableStream.prototype[Symbol.asyncIterator]) {
+  // Safari lacks async iteration support for ReadableStream
+  ReadableStream.prototype[Symbol.asyncIterator] = function () {
+    const reader = this.getReader()
+    return {
+      next () {
+        return reader.read()
+      },
+      return () {
+        reader.releaseLock()
+        return Promise.resolve({ done: true })
+      }
+    }
   }
 }
