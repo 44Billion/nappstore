@@ -4,6 +4,8 @@
 
 // Or import everything from core-js/actual to polyfill all modern features
 import 'core-js/actual'
+// Promise.try is still a proposal so core-js does not include it by default
+import 'core-js/proposals/promise-try'
 
 if (typeof window !== 'undefined' && typeof window.requestIdleCallback !== 'function') {
   window.requestIdleCallback = function (callback, options) {
