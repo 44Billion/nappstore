@@ -181,6 +181,22 @@ function chunksToDataUrl (binaryChunks, mimeType) {
   })
 }
 
+// Fetch a file from Nostr relays and convert it to a data URL
+export async function fetchFileDataUrl ({ pubkey, rootHash, relays, mimeType, maxSizeBytes = null }) {
+  if (!pubkey || !rootHash || !Array.isArray(relays) || relays.length === 0) {
+    return null
+  }
+
+  try {
+    const chunks = await fetchFileFromChunks(pubkey, rootHash, relays, maxSizeBytes)
+    if (!chunks) return null
+    return await chunksToDataUrl(chunks, mimeType || 'application/octet-stream')
+  } catch (error) {
+    console.error('Error fetching file data URL:', error)
+    return null
+  }
+}
+
 // Get file metadata from bundle event
 function getFileFromBundle (bundleEvent, filenamePredicate) {
   const fileTag = bundleEvent.tags.find(t =>

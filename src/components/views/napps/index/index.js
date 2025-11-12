@@ -2,7 +2,7 @@ import { f, useStore, useTask, useSignal } from '#f'
 import '#f/components/f-to-signals.js'
 import { appEncode } from '#helpers/nostr/nip19.js'
 import nostrRelays from '#services/nostr-relays.js'
-import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
+import { fetchFileDataUrl, deduplicateEvents } from '#services/app-metadata-fetcher.js'
 import { cssVars } from '#assets/styles/theme.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
@@ -10,6 +10,18 @@ import '#shared/avatar.js'
 
 const PRIMAL_RELAY = 'wss://relay.primal.net'
 const APPS_PER_PAGE = 20
+const DEFAULT_BUNDLE_KIND = 37448
+const MAX_ICON_SIZE_BYTES = 5.5 * 1024 * 1024
+
+function getTagValue (tags, key) {
+  if (!Array.isArray(tags)) return null
+  const tag = tags.find(entry => Array.isArray(entry) && entry[0] === key)
+  return tag ? tag.slice(1) : null
+}
+
+function trimOrEmpty (value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
 
 // Lazy lists all apps
 f('nappsIndex', function () {
@@ -20,6 +32,24 @@ f('nappsIndex', function () {
     oldestTimestamp$: Math.floor(Date.now() / 1000),
     profileCache$: {},
     isFirstLoad$: true,
+    pendingOpenAppId$: null,
+    pendingOpenTimeoutId$: null,
+
+    showOpenFeedback (appId) {
+      const existingTimeout = this.pendingOpenTimeoutId$()
+      if (existingTimeout) {
+        clearTimeout(existingTimeout)
+      }
+
+      this.pendingOpenAppId$(appId)
+
+      const timeoutId = setTimeout(() => {
+        this.pendingOpenAppId$(null)
+        this.pendingOpenTimeoutId$(null)
+      }, 3000)
+
+      this.pendingOpenTimeoutId$(timeoutId)
+    },
 
     async loadMoreApps () {
       if (this.isLoading$() || !this.hasMore$()) return
@@ -27,10 +57,10 @@ f('nappsIndex', function () {
       this.isLoading$(true)
 
       try {
-        // Fetch app bundle events (kind 37448) from Primal relay
+        // Fetch stall events (kind 37348) from Primal relay
         const { result: events } = await nostrRelays.getEvents(
           {
-            kinds: [37448],
+            kinds: [37348],
             until: this.oldestTimestamp$(),
             limit: APPS_PER_PAGE
           },
@@ -48,68 +78,100 @@ f('nappsIndex', function () {
         const oldestEvent = events[events.length - 1]
         this.oldestTimestamp$(oldestEvent.created_at - 1)
 
-        // Group by author + d tag to avoid duplicates
-        const uniqueApps = new Map()
+        const dedupedEvents = deduplicateEvents(events).sort((a, b) => b.created_at - a.created_at)
+
         const existingApps = this.apps$()
+        const existingKeys = new Set(existingApps.map(app => `${app.pubkey}:${app.dTag}`))
+        const eventsByKey = new Map()
 
-        for (const event of events) {
-          const dTag = event.tags.find(t => t[0] === 'd')?.[1]
-          if (!dTag) continue
+        for (const event of dedupedEvents) {
+          const dTagValue = getTagValue(event.tags, 'd')?.[0]
+          if (!dTagValue) continue
 
-          const key = `${event.pubkey}:${dTag}`
-
-          // Skip if already in our list
-          if (existingApps.some(a => `${a.pubkey}:${a.dTag}` === key)) continue
-
-          // Keep only the newest version per author+dTag
-          if (!uniqueApps.has(key) || event.created_at > uniqueApps.get(key).created_at) {
-            uniqueApps.set(key, event)
+          const key = `${event.pubkey}:${dTagValue}`
+          if (existingKeys.has(key)) continue
+          if (!eventsByKey.has(key)) {
+            eventsByKey.set(key, event)
           }
         }
 
-        // Fetch metadata for each unique app
+        const iconCache = lru.ns('apps')
+
         const newApps = await Promise.all(
-          Array.from(uniqueApps.values()).map(async (bundleEvent) => {
+          Array.from(eventsByKey.values()).map(async (stallEvent) => {
             try {
-              const dTag = bundleEvent.tags.find(t => t[0] === 'd')[1]
+              const dTagArray = getTagValue(stallEvent.tags, 'd')
+              if (!dTagArray?.[0]) return null
+              const dTag = dTagArray[0]
+
+              const channelTag = getTagValue(stallEvent.tags, 'c')
+              const channelValue = trimOrEmpty(channelTag?.[0]).toLowerCase()
+
+              let bundleKind = DEFAULT_BUNDLE_KIND
+              if (channelValue === 'next') bundleKind = 37449
+              if (channelValue === 'draft') bundleKind = 37450
+
               const encodedApp = appEncode({
                 dTag,
-                pubkey: bundleEvent.pubkey,
-                kind: bundleEvent.kind
+                pubkey: stallEvent.pubkey,
+                kind: bundleKind
               })
 
-              const metadata = await fetchAppMetadata(bundleEvent, [PRIMAL_RELAY])
+              const nameTag = getTagValue(stallEvent.tags, 'name')
+              const summaryTag = getTagValue(stallEvent.tags, 'summary')
+              const iconTag = getTagValue(stallEvent.tags, 'icon')
 
-              // Store icon in localStorage for app-icon component
-              if (metadata.icon?.url) {
-                try {
-                  lru.ns('apps').setItem(
-                    `appById_${encodedApp}_icon`,
-                    { fx: metadata.icon.fx, url: metadata.icon.url }
-                  )
-                } catch (err) {
-                  console.error('Failed to cache icon:', err)
+              let icon = null
+
+              if (iconTag?.[0]) {
+                const [iconRootHash, iconMimeType] = iconTag
+                const cacheKey = `appById_${encodedApp}_icon`
+                const cachedIcon = iconCache.getItem(cacheKey)
+
+                if (cachedIcon?.fx === iconRootHash && cachedIcon?.url) {
+                  icon = cachedIcon
+                } else {
+                  const iconUrl = await fetchFileDataUrl({
+                    pubkey: stallEvent.pubkey,
+                    rootHash: iconRootHash,
+                    mimeType: iconMimeType,
+                    relays: [PRIMAL_RELAY],
+                    maxSizeBytes: MAX_ICON_SIZE_BYTES
+                  })
+
+                  if (iconUrl) {
+                    icon = { fx: iconRootHash, url: iconUrl }
+                    try {
+                      iconCache.setItem(cacheKey, icon)
+                    } catch (err) {
+                      console.error('Failed to cache icon:', err)
+                    }
+                  } else if (cachedIcon?.url) {
+                    icon = { fx: iconRootHash, url: cachedIcon.url }
+                  }
                 }
               }
+
+              const trimmedName = trimOrEmpty(nameTag?.[0])
+              const trimmedSummary = trimOrEmpty(summaryTag?.[0])
 
               return {
                 id: encodedApp,
                 dTag,
-                pubkey: bundleEvent.pubkey,
-                kind: bundleEvent.kind,
-                name: metadata.name || dTag,
-                description: metadata.description || 'No description',
-                icon: metadata.icon,
-                uploadedAt: bundleEvent.created_at * 1000
+                pubkey: stallEvent.pubkey,
+                kind: bundleKind,
+                name: trimmedName || dTag,
+                description: trimmedSummary || 'No description',
+                icon,
+                uploadedAt: stallEvent.created_at * 1000
               }
-            } catch (err) {
-              console.error('Failed to fetch app metadata:', err)
+            } catch (error) {
+              console.error('Failed to process stall event:', error)
               return null
             }
-          }).filter(Boolean)
+          })
         )
 
-        // Filter out failed metadata fetches
         const validApps = newApps.filter(app => app !== null)
 
         // Fetch profiles for authors
@@ -118,8 +180,7 @@ f('nappsIndex', function () {
         // Append to existing apps
         this.apps$([...existingApps, ...validApps])
 
-        // If we got fewer apps than requested, we've reached the end
-        if (validApps.length < APPS_PER_PAGE / 2) {
+        if (validApps.length < APPS_PER_PAGE / 2 && events.length < APPS_PER_PAGE) {
           this.hasMore$(false)
         }
 
@@ -181,6 +242,7 @@ f('nappsIndex', function () {
     },
 
     handleOpenApp (app) {
+      this.showOpenFeedback(app.id)
       const encodedApp = appEncode({
         dTag: app.dTag,
         pubkey: app.pubkey,
@@ -217,11 +279,21 @@ f('nappsIndex', function () {
     await store.loadMoreApps()
   })
 
+  useTask(() => {
+    return () => {
+      const timeoutId = store.pendingOpenTimeoutId$()
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+      }
+    }
+  })
+
   const apps = store.apps$()
   const isLoading = store.isLoading$()
   const hasMore = store.hasMore$()
   const profileCache = store.profileCache$()
   const isFirstLoad = store.isFirstLoad$()
+  const pendingOpenAppId = store.pendingOpenAppId$()
 
   return this.h`
     <div style=${{
@@ -232,6 +304,13 @@ f('nappsIndex', function () {
       maxWidth: '900px',
       margin: '0 auto'
     }}>
+      <style>
+        @keyframes feedbackPulse {
+          0% { opacity: 0.2; }
+          50% { opacity: 0.5; }
+          100% { opacity: 0.2; }
+        }
+      </style>
       <!-- Header -->
       <div style=${{
         fontSize: '21px',
@@ -260,6 +339,7 @@ f('nappsIndex', function () {
       const profile = profileCache[app.pubkey] || {}
       const authorName = profile.name || profile.display_name || 'Anonymous'
       const key = app.id
+      const isPendingOpen = pendingOpenAppId === app.id
 
       return this.h({ key })`
           <f-to-signals
@@ -279,7 +359,8 @@ f('nappsIndex', function () {
                     borderRadius: '12px',
                     border: '2px solid ' + cssVars.colors.bg2,
                     cursor: 'pointer',
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
+                    position: 'relative'
                   }}
                   onmouseenter=${(e) => {
                     e.currentTarget.style.borderColor = cssVars.colors.bgSelected
@@ -290,6 +371,22 @@ f('nappsIndex', function () {
                     e.currentTarget.style.transform = 'translateY(0)'
                   }}
                 >
+                  ${
+                    isPendingOpen
+                      ? this.h`
+                        <div style=${{
+                          position: 'absolute',
+                          inset: '0',
+                          borderRadius: '12px',
+                          backgroundColor: cssVars.colors.bgSelected,
+                          pointerEvents: 'none',
+                          animation: 'feedbackPulse 1.2s ease-in-out infinite',
+                          opacity: 0.2,
+                          zIndex: 1
+                        }} />
+                      `
+                      : ''
+                  }
                   <!-- App Icon -->
                   <div style=${{
                     width: '56px',
