@@ -65,7 +65,7 @@ f('nappsIndex', function () {
             limit: APPS_PER_PAGE
           },
           [PRIMAL_RELAY],
-          10000
+          20000
         )
 
         if (events.length === 0) {
