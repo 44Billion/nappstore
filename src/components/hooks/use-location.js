@@ -30,6 +30,9 @@ export function useLocationInit (router) {
             ? history.state
             : { ...history.state, _f_useLocation_uid: currentUid })
         : { previousRoute: null, _f_useLocation_uid: currentUid }
+      if (isInit && (!history.state || !('_f_useLocation_uid' in history.state))) {
+        history.replaceState(state, '')
+      }
       return {
         uid: currentUid,
         url,
@@ -57,15 +60,17 @@ export function useLocationInit (router) {
           console.warn('Use replaceState when keeping url')
           return this.replaceState(...args)
         }
-        this.uidCounter$(v => v + 1)
-        const newState = { ...args[0], _f_useLocation_uid: this.uidCounter$() }
+        const currentUid = history.state?._f_useLocation_uid ?? 0
+        const nextUid = currentUid + 1
+        this.uidCounter$(nextUid)
+        const newState = { ...args[0], _f_useLocation_uid: nextUid }
         history.pushState(newState, ...args.slice(1))
         this.route$(this.getRoute({ shouldUpdateUrl: true }))
       },
       back () {
         const currentState = history.state || {}
         const currentUid = currentState._f_useLocation_uid || 0
-        if (currentUid <= 1) return
+        if (currentUid <= 0) return
         history.back()
       },
       forward () { history.forward() },
@@ -74,14 +79,18 @@ export function useLocationInit (router) {
         const currentUid = currentState._f_useLocation_uid || 0
 
         if (delta < 0) {
-          const minDelta = Math.max(delta, -(currentUid - 1))
+          const minDelta = Math.max(delta, -currentUid)
           if (minDelta === 0) return
           history.go(minDelta)
         } else {
           history.go(delta)
         }
       },
-      onPopState () { this.route$(this.getRoute({ shouldUpdateUrl: true })) }
+      onPopState () {
+        const route = this.getRoute({ shouldUpdateUrl: true })
+        if (route.uid > this.uidCounter$()) this.uidCounter$(route.uid)
+        this.route$(route)
+      }
     }
   })
   const closestLoc = useClosestStore('_f_useLocation', () => ({

@@ -1,12 +1,11 @@
 import { f, useStore, useTask, useClosestStore } from '#f'
 import useLocation from '#hooks/use-location.js'
-import '#views/home/tabs.js'
 
 // props: {
 // shouldPreload($)=true|false,
 // path($)='/some-path'|paths($)=['/some-path', ...]
 // }
-f('aRoute', function () {
+f('a-route', function () {
   const loc = useLocation()
   let {
     isLoaded$,
@@ -48,14 +47,21 @@ f('aRoute', function () {
   // doesn't run until route matches for the first time (when hasMatchedOnce$ is set),
   // but on later path changes
   useTask(({ track }) => {
-    let [hasMatchedOnce, locRoute] = track(() => [hasMatchedOnce$(), loc.route$(), shouldUpdateUidWhenPathMatches$()])
+    let [hasMatchedOnce, locRoute, uidCounter] = track(() => [hasMatchedOnce$(), loc.route$(), shouldUpdateUidWhenPathMatches$(), loc.uidCounter$()])
     if (!hasMatchedOnce) return
     if (isFirstRunSinceMatch) {
       isFirstRunSinceMatch = false
       return
     }
     if (paths$().every(v => v !== locRoute.handler.path)) {
-      distance$(Math.abs(routeProps.route$().uid - locRoute.uid))
+      const storedUid = routeProps.route$().uid
+      const dist = Math.abs(storedUid - locRoute.uid)
+      if (dist === 0 || storedUid > uidCounter) {
+        routeProps.route$({ ...routeProps.route$(), uid: -Infinity })
+        distance$(Infinity)
+      } else {
+        distance$(dist)
+      }
       return
     }
 
