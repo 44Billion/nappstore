@@ -1,8 +1,8 @@
 {
-  "name": "44b",
+  "name": "napps",
   "author": "Arthur França",
   "version": "1.0.0",
-  "description": "kind:1 nostr client",
+  "description": "Napps, the First Nostr App Store",
   "main": "index.js",
   "type": "module",
   "scripts": {

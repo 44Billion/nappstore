@@ -1,0 +1,165 @@
+name: Publish Napp On Push
+
+# ------------------------------------------------------------------------------
+# WORKFLOW CONFIGURATION & SECRETS
+# ------------------------------------------------------------------------------
+# This workflow requires the following Repository Secret to be set:
+#
+# 1. NOSTR_SECRET_KEY
+#    - Description: The Nostr secret key (starting with 'nsec' or hex) used to
+#      sign and publish the application via 'nappup'.
+#    - How to set: Go to Settings > Secrets and variables > Actions > New repository secret
+#
+# Note: GITHUB_TOKEN is automatically provided by GitHub Actions and does not
+# need to be manually configured.
+# ------------------------------------------------------------------------------
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-publish:
+    # https://docs.github.com/en/billing/reference/actions-runner-pricing
+    runs-on: ${{ github.event.repository.private && 'ubuntu-slim' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      issues: write
+    env:
+      BUILD_FAILED: 'false'
+      PUBLISH_FAILED: 'false'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Variables
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Detect Default Branch
+          echo "Detecting repository info..."
+          DEFAULT_BRANCH=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')
+          echo "Detected default branch: $DEFAULT_BRANCH"
+
+          # Determine NOTIFY_USER
+          REPO_OWNER="${{ github.repository_owner }}"
+          echo "Determining notification user for repository owner: $REPO_OWNER"
+
+          OWNER_TYPE=$(gh api "users/$REPO_OWNER" --jq '.type' || echo "Unknown")
+
+          if [ "$OWNER_TYPE" == "Organization" ]; then
+            echo "$REPO_OWNER is an Organization. Fetching an admin..."
+            # Try to get the first admin member
+            NOTIFY_USER=$(gh api "orgs/$REPO_OWNER/members?role=admin&per_page=1" --jq '.[0].login' || echo "")
+            if [ -z "$NOTIFY_USER" ]; then
+               echo "Could not fetch org admin (permissions?). Falling back to actor."
+               NOTIFY_USER="${{ github.actor }}"
+            fi
+          elif [ "$OWNER_TYPE" == "User" ]; then
+            echo "$REPO_OWNER is a User."
+            NOTIFY_USER="$REPO_OWNER"
+          else
+            echo "Could not determine owner type. Falling back to actor."
+            NOTIFY_USER="${{ github.actor }}"
+          fi
+
+          echo "NOTIFY_USER=$NOTIFY_USER" >> $GITHUB_ENV
+          echo "ORIGIN_BRANCH=$DEFAULT_BRANCH" >> $GITHUB_ENV
+
+      - name: Setup Node
+        # ubuntu-slim has a recent enough Node.js
+        # https://github.com/actions/runner-images/blob/main/images/ubuntu-slim/ubuntu-slim-Readme.md#language-and-runtime
+        if: success() && !github.event.repository.private
+        uses: actions/setup-node@v4
+        with:
+          node-version: '*'
+
+      - name: Install Dependencies
+        if: success()
+        run: npm ci
+
+      - name: Build
+        if: success()
+        id: build
+        run: |
+          # Determine project folder name (assuming it matches the repo folder name)
+          PROJECT_NAME=$(basename $PWD)
+          DIST_PATH="dist/$PROJECT_NAME"
+          echo "Expected dist path: $DIST_PATH"
+
+          # Clean existing dist
+          if [ -d "$DIST_PATH" ]; then
+            echo "Cleaning $DIST_PATH..."
+            rm -rf "$DIST_PATH"
+          fi
+
+          # Run build
+          if ! npm run build; then
+             echo "::error::Build failed"
+             echo "BUILD_FAILED=true" >> $GITHUB_ENV
+             exit 1
+          fi
+
+          # Verify build output
+          if [ ! -d "$DIST_PATH" ]; then
+            echo "::error::Build finished but $DIST_PATH not found"
+            echo "BUILD_FAILED=true" >> $GITHUB_ENV
+            exit 1
+          fi
+
+          echo "DIST_PATH=$DIST_PATH" >> $GITHUB_ENV
+
+      - name: Notify Build Failure
+        if: failure() && env.BUILD_FAILED == 'true'
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Automatic Build Failed" \
+            --body "@$NOTIFY_USER The build on branch \`$ORIGIN_BRANCH\` failed. Please check the logs." \
+            --assignee "$NOTIFY_USER" || \
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Automatic Build Failed" \
+            --body "@$NOTIFY_USER The build on branch \`$ORIGIN_BRANCH\` failed. Please check the logs."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish
+        if: success()
+        env:
+          NOSTR_SECRET_KEY: ${{ secrets.NOSTR_SECRET_KEY }}
+        run: |
+          if [ -z "$NOSTR_SECRET_KEY" ]; then
+            echo "::error::NOSTR_SECRET_KEY secret is not set"
+            echo "PUBLISH_FAILED=true" >> $GITHUB_ENV
+            exit 1
+          fi
+
+          echo "Publishing $DIST_PATH..."
+          # Using -y to accept npx and nappup prompts automatically
+          if ! npx -y nappup "$DIST_PATH" -y -s "$NOSTR_SECRET_KEY"; then
+            echo "::error::Publish failed"
+            echo "PUBLISH_FAILED=true" >> $GITHUB_ENV
+            exit 1
+          fi
+
+      - name: Notify Publish Failure
+        if: failure() && env.PUBLISH_FAILED == 'true'
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Automatic Publish Failed" \
+            --body "@$NOTIFY_USER The publication of the app failed. Please check the logs." \
+            --assignee "$NOTIFY_USER" || \
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Automatic Publish Failed" \
+            --body "@$NOTIFY_USER The publication of the app failed. Please check the logs."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
