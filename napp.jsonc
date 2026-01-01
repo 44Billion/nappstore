@@ -1,0 +1,62 @@
+// .well-known/napp.json
+// https://code.visualstudio.com/docs/languages/json#_json-with-comments
+// https://github.com/microsoft/node-jsonc-parser
+// This file shouldn't be uploaded when publishing apps,
+// i.e. editing just this file shouldn't bump the app version
+// All fields are optional
+{
+  // Nostr pubkey representing the Nostr app itself, not the publisher
+  // Think of it as the app store page for this app
+  "self": [
+    // ["<hex pubkey>"]
+  ],
+  "stallIcon": [
+    // ["<base64 data url>" /* e.g. "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..." */]
+  ],
+  "stallName": [
+    // first entry is the default for missing languages
+    // ["Fantastic SideScroller", "en" /* optional; ISO 639-1 language code */]
+  ],
+  "stallSummary": [
+    // ["A brief description", "en" /* optional; ISO 639-1 language code */]
+  ],
+  // Use ISO 3166-1 alpha-2 country codes
+  // Leave empty if publishing globally
+  "country": [
+    // "US",
+    // "GB"
+  ],
+  // Choose up to three subcategories
+  // ["<category name>", ["<subcategory name 1>", "<subcategory name 2>", "<...>"]]
+  // Pick just those from the standard list below
+  "category": [
+    // ["other", [
+    //   "other"
+    // ]],
+    // ["games", [
+    //   "other","action","rpg","strategy","shooter","fighting","simulation","puzzle","board","gambling","racing","sports","ar","vr"
+    // ]],
+    // ["money", [
+    //   "other","crypto","loans","investments","wallet","gambling","raffle","crowdfunding","donation","jobs"
+    // ]],
+    // ["shopping", [
+    //   "other","marketplace","store","auction"
+    // ]],
+    // ["social", [
+    //   "other","network","messenger","blog","dating"
+    // ]],
+    // ["audiovisual", [
+    //   "other","podcast","music","video","news"
+    // ]],
+    // ["utilities", [
+    //   "other","weather","office","finances","learning","text editor","image editor","audio editor","video editor","ar","vr","ai"
+    // ]]
+  ],
+  // choose up to three hashtags
+  "hashtag": [
+    // ["anexample" /* lowercase, no spaces */, "An Example" /* optional; human readable */],
+    // ["rss"], // for e.g. the audiovisual/news subcategory
+    // ["dating"], // (or "romance") for e.g. for games/simulation subcategory
+    // ["sidescroller"] // for e.g. games/action subcategory
+  ]
+}

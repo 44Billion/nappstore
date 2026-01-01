@@ -2,6 +2,7 @@ import esbuild from 'esbuild'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import fs from 'node:fs'
+import { parse } from 'jsonc-parser'
 
 const { dirname } = import.meta
 // https://github.com/evanw/esbuild/issues/2609#issuecomment-1279867125
@@ -18,6 +19,23 @@ const textLoaderMinifiedCssPlugin = {
 
 const isDev = process.env.NODE_ENV === 'development'
 const prodOutdir = `${dirname}/../dist/${dirname.split('/').slice(-2, -1)}` // dist/<root dir>
+const outdir = isDev
+  // .serve({ servedir: `${dirname}/../src/assets/html` }) will serve app.js from memory as if it was there
+  // and also index.html that ~~is~~was really there (now its an entrypoint)
+  ? `${dirname}/../src/assets/html`
+  // .build() will create app.js at `${dirname}/../build
+  : prodOutdir
+
+const buildNappJson = async () => {
+  const inputPath = path.join(dirname, '../napp.jsonc')
+  const outputPath = path.join(outdir, '.well-known/napp.json')
+  const content = await readFile(inputPath, 'utf-8')
+  const parsed = parse(content)
+  const beautified = JSON.stringify(parsed, null, 2)
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  fs.writeFileSync(outputPath, beautified)
+}
+
 // same as esbuild.build, but reusable
 const ctx = await esbuild.context({
   plugins: [textLoaderMinifiedCssPlugin],
@@ -40,12 +58,7 @@ const ctx = await esbuild.context({
     `${dirname}/../src/assets/html/index.html`, // will use "copy" loader
     `${dirname}/../src/assets/media/favicon.ico` // will use "copy" loader
   ],
-  outdir: isDev
-    // .serve({ servedir: `${dirname}/../src/assets/html` }) will serve app.js from memory as if it was there
-    // and also index.html that ~~is~~was really there (now its an entrypoint)
-    ? `${dirname}/../src/assets/html`
-    // .build() will create app.js at `${dirname}/../build
-    : prodOutdir,
+  outdir,
   entryNames: '[name]',
   bundle: true,
   platform: 'browser',
@@ -92,6 +105,7 @@ if (isDev) {
     fs.rmSync(joinedProdOutDir, { recursive: true, force: true })
   }
   console.log(`Building to ${joinedProdOutDir}`)
-  ctx.rebuild()
+  await ctx.rebuild()
+  await buildNappJson()
   ctx.dispose()
 }
