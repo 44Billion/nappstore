@@ -1,8 +1,8 @@
 {
-  "name": "napps",
+  "name": "plusapp",
   "author": "Arthur França",
   "version": "1.0.0",
-  "description": "Napps, the First Nostr App Store",
+  "description": "+App, the First Nostr App Store",
   "main": "index.js",
   "type": "module",
   "scripts": {

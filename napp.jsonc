@@ -14,7 +14,7 @@
     // ["<base64 data url>" /* e.g. "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..." */]
   ],
   "stallName": [
-    ["+App"]
+    ["App Store"]
     // first entry is the default for missing languages
     // ["Fantastic SideScroller", "en" /* optional; ISO 639-1 language code */]
   ],
@@ -59,7 +59,6 @@
   ],
   // choose up to three hashtags
   "hashtag": [
-    ["napps", "Napps"],
     ["appstore", "App Store"],
     ["nostr", "Nostr"]
     // ["anexample" /* lowercase, no spaces */, "An Example" /* optional; human readable */],

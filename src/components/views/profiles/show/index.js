@@ -386,7 +386,7 @@ f('profilesShow', function () {
           paddingBottom: '8px',
           borderBottom: '2px solid ' + cssVars.colors.mgBorder
         }}>
-          ${isOwnProfile ? 'My Napps' : 'Napps'}
+          ${isOwnProfile ? 'My Apps' : 'Apps'}
         </div>
 
         ${

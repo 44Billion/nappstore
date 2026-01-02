@@ -65,11 +65,12 @@ f('aHome', function () {
           }}>
             <img
               src=${logo}
-              alt="Napps store logo"
+              alt="+App logo"
               style=${{
                 width: '36px',
                 height: '36px',
-                objectFit: 'contain'
+                objectFit: 'contain',
+                borderRadius: '50%'
               }}
             />
             <div style=${{
@@ -78,7 +79,7 @@ f('aHome', function () {
               color: cssVars.colors.fg,
               letterSpacing: '-0.5px'
             }}>
-              Napps
+              App Store
             </div>
           </div>
 

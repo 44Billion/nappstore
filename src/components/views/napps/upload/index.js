@@ -310,7 +310,7 @@ f('nappsUpload', function () {
             fontWeight: 'bold',
             color: cssVars.colors.fg
           }}>
-            Upload Your Napp
+            Upload Your App
           </div>
 
           <!-- Steps -->
@@ -491,11 +491,11 @@ f('nappsUpload', function () {
               textAlign: 'center'
             }}
           >
-            ${isUploading ? '⏳ Uploading...' : 'Upload Napp'}
+            ${isUploading ? '⏳ Uploading...' : 'Upload App'}
           </button>
         </div>
 
-        <!-- My Napps Section -->
+        <!-- My apps Section -->
         <div style=${{
           display: 'flex',
           flexDirection: 'column',
@@ -507,7 +507,7 @@ f('nappsUpload', function () {
             color: cssVars.colors.fg,
             paddingBottom: '8px'
           }}>
-            My Napps
+            My Apps
           </div>
 
           ${
@@ -533,7 +533,7 @@ f('nappsUpload', function () {
                     fontSize: '14px',
                     color: cssVars.colors.fg2
                   }}>
-                    Loading your napps...
+                    Loading your apps...
                   </div>
                 </div>
                 <style>

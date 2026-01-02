@@ -1,6 +1,6 @@
 # Project
 
-This is Nappstore, a Nostr app store that enable users
+This is +App, a Nostr app store that enable users
 to discover nostr apps (`napps`) and upload their own napps.
 
 A `napp` is a good ol' static website bundled as a Nostr event. Each of its files is split into tiny chunk events, all signed by the author.

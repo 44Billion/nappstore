@@ -318,7 +318,7 @@ f('nappsIndex', function () {
         color: cssVars.colors.fg,
         paddingBottom: '5px'
       }}>
-        Discover Napps
+        Discover Apps
       </div>
 
       <!-- Apps Grid -->
@@ -502,7 +502,7 @@ f('nappsIndex', function () {
             fontSize: '14px',
             color: cssVars.colors.fg2
           }}>
-            ${isFirstLoad ? 'Loading napps...' : 'Loading more napps...'}
+            ${isFirstLoad ? 'Loading apps...' : 'Loading more apps...'}
           </div>
         </div>
         <style>
