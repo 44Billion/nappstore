@@ -14,10 +14,12 @@
     // ["<base64 data url>" /* e.g. "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..." */]
   ],
   "stallName": [
+    ["+App"]
     // first entry is the default for missing languages
     // ["Fantastic SideScroller", "en" /* optional; ISO 639-1 language code */]
   ],
   "stallSummary": [
+    ["All apps in one place"]
     // ["A brief description", "en" /* optional; ISO 639-1 language code */]
   ],
   // Use ISO 3166-1 alpha-2 country codes
@@ -30,6 +32,9 @@
   // ["<category name>", ["<subcategory name 1>", "<subcategory name 2>", "<...>"]]
   // Pick just those from the standard list below
   "category": [
+    ["shopping", [
+      "marketplace", "store"
+    ]]
     // ["other", [
     //   "other"
     // ]],
@@ -54,6 +59,9 @@
   ],
   // choose up to three hashtags
   "hashtag": [
+    ["napps", "Napps"],
+    ["appstore", "App Store"],
+    ["nostr", "Nostr"]
     // ["anexample" /* lowercase, no spaces */, "An Example" /* optional; human readable */],
     // ["rss"], // for e.g. the audiovisual/news subcategory
     // ["dating"], // (or "romance") for e.g. for games/simulation subcategory
