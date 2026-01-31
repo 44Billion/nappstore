@@ -10,6 +10,12 @@ name: Publish Napp On Push
 #      sign and publish the application via 'nappup'.
 #    - How to set: Go to Settings > Secrets and variables > Actions > New repository secret
 #
+# 2. NAPPUP_DIST_PATH (Optional)
+#    - Description: The path to the build output directory.
+#    - Default: dist/<project-name>
+#    - Example: If your build output is in 'build', set this variable to 'build'.
+#    - How to set: Go to Settings > Secrets and variables > Actions > New repository variable
+#
 # Note: GITHUB_TOKEN is automatically provided by GitHub Actions and does not
 # need to be manually configured.
 # ------------------------------------------------------------------------------
@@ -87,10 +93,19 @@ jobs:
       - name: Build
         if: success()
         id: build
+        env:
+          NAPPUP_DIST_PATH: ${{ vars.NAPPUP_DIST_PATH }}
         run: |
           # Determine project folder name (assuming it matches the repo folder name)
           PROJECT_NAME=$(basename $PWD)
-          DIST_PATH="dist/$PROJECT_NAME"
+          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+
+          if [ -n "$NAPPUP_DIST_PATH" ]; then
+            DIST_PATH="$NAPPUP_DIST_PATH"
+          else
+            DIST_PATH="dist/$PROJECT_NAME"
+          fi
+
           echo "Expected dist path: $DIST_PATH"
 
           # Clean existing dist
@@ -143,7 +158,7 @@ jobs:
 
           echo "Publishing $DIST_PATH..."
           # Using -y to accept npx and nappup prompts automatically
-          if ! npx -y nappup "$DIST_PATH" -y -s "$NOSTR_SECRET_KEY"; then
+          if ! npx -y nappup "$DIST_PATH" -y -s "$NOSTR_SECRET_KEY" -D "$PROJECT_NAME"; then
             echo "::error::Publish failed"
             echo "PUBLISH_FAILED=true" >> $GITHUB_ENV
             exit 1
