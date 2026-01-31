@@ -38,7 +38,7 @@ const [defaultThemeCssClass, colorCssVarsObj, defaultThemeCssString] = createThe
   fgSuccess: 'oklch(0.62 0.15 162.48)',
   fgError: 'oklch(0.62 0.15 25.33)',
   fgWarning: 'oklch(0.62 0.15 70.08)',
-  fgInfo: 'oklch(0.62 0.19 259.81)',
+  fgInfo: 'oklch(0.62 0.19 259.81)'
   // fgHeader: 'oklch(0.39 0 256)',
   //
   // primary: 'oklch(0.11 0.01 266.51)',

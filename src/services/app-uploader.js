@@ -10,6 +10,7 @@ import { extractHtmlMetadata, findFavicon, findIndexFile } from '#services/app-m
 import { NAPP_CATEGORIES } from '../config/napp-categories.js'
 
 const PRIMAL_RELAY = 'wss://relay.primal.net'
+const B_RELAY = 'wss://relay.44billion.net'
 const CHUNK_SIZE = 51000
 const RATE_LIMIT_BACKOFF_STEP = 2000
 const MAX_UPLOAD_RETRIES = 5
@@ -407,7 +408,8 @@ async function maybeUploadStall ({
   const publishStall = async (event) => {
     reportProgress?.({ status: 'Publishing stall metadata...' })
     const signedEvent = await signer.signEvent(event)
-    await sendEventToRelays(signedEvent, writeRelays, {
+    const stallRelays = [...new Set([...writeRelays, B_RELAY])]
+    await sendEventToRelays(signedEvent, stallRelays, {
       timeout: 15000,
       throttleState,
       reportStatus: status => reportProgress?.({ status })

@@ -9,6 +9,7 @@ import '#shared/app-icon.js'
 import '#shared/avatar.js'
 
 const PRIMAL_RELAY = 'wss://relay.primal.net'
+const B_RELAY = 'wss://relay.44billion.net'
 const APPS_PER_PAGE = 20
 const DEFAULT_BUNDLE_KIND = 37448
 const MAX_ICON_SIZE_BYTES = 5.5 * 1024 * 1024
@@ -57,14 +58,14 @@ f('nappsIndex', function () {
       this.isLoading$(true)
 
       try {
-        // Fetch stall events (kind 37348) from Primal relay
+        // Fetch stall events (kind 37348) from 44 Billion (B) relay
         const { result: events } = await nostrRelays.getEvents(
           {
             kinds: [37348],
             until: this.oldestTimestamp$(),
             limit: APPS_PER_PAGE
           },
-          [PRIMAL_RELAY],
+          [B_RELAY],
           20000
         )
 
