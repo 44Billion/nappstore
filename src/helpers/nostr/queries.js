@@ -91,23 +91,42 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
 }
 
 const relaysByPubkey = {}
-export async function getRelays (pubkey, { _nostrRelays = nostrRelays } = {}) {
-  if (relaysByPubkey[pubkey]) return relaysByPubkey[pubkey]
-
-  const { result: getEventsResult, errors } = await nostrRelays.getEvents({ kinds: [10002], authors: [pubkey], limit: 1 }, seedRelays)
-  const event = getEventsResult.sort((a, b) => b.created_at - a.created_at)[0]
-  if (!event) {
+// Returns a mapping of pubkeys to their relays.
+export async function getRelaysByPubkey (pubkeys, { _nostrRelays = nostrRelays } = {}) {
+  const missingPubkeys = pubkeys.filter(pk => !relaysByPubkey[pk])
+  if (missingPubkeys.length > 0) {
+    const { result: getEventsResult, errors } = await _nostrRelays.getEvents({ kinds: [10002], authors: missingPubkeys, limit: missingPubkeys.length }, seedRelays)
     if (errors.length) console.log(errors)
-    return { read: freeRelays.slice(0, 2), write: freeRelays.slice(0, 2), meta: { events: [] } }
+
+    const latestByPubkey = {}
+    for (const event of getEventsResult) {
+      if (!latestByPubkey[event.pubkey] || event.created_at > latestByPubkey[event.pubkey].created_at) {
+        latestByPubkey[event.pubkey] = event
+      }
+    }
+
+    for (const pubkey of missingPubkeys) {
+      const event = latestByPubkey[pubkey]
+      if (event) {
+        relaysByPubkey[pubkey] = eventToRelays(event)
+        maybeUnref(setTimeout(
+          () => { delete relaysByPubkey[pubkey] },
+          3 * 60 * 1000
+        ))
+      }
+    }
   }
 
-  const relays = eventToRelays(event)
-  relaysByPubkey[pubkey] = relays
-  maybeUnref(setTimeout(
-    () => { delete relaysByPubkey[pubkey] },
-    3 * 60 * 1000
-  ))
-  return relays
+  return pubkeys.reduce((acc, pubkey) => {
+    acc[pubkey] = relaysByPubkey[pubkey] || { read: freeRelays.slice(0, 2), write: freeRelays.slice(0, 2), meta: { events: [] } }
+    return acc
+  }, {})
+}
+
+// Returns the relays for a single pubkey.
+export async function getRelays (pubkey, { _nostrRelays = nostrRelays } = {}) {
+  const relaysByPubkeyResult = await getRelaysByPubkey([pubkey], { _nostrRelays })
+  return relaysByPubkeyResult[pubkey]
 }
 export function eventToRelays (event) {
   if (typeof event !== 'object' || event === null || event.kind !== 10002 || typeof event.pubkey !== 'string') {

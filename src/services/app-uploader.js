@@ -9,7 +9,6 @@ import { isNostrAppDTagSafe, deriveNostrAppDTag } from '#helpers/app.js'
 import { extractHtmlMetadata, findFavicon, findIndexFile } from '#services/app-metadata.js'
 import { NAPP_CATEGORIES } from '../config/napp-categories.js'
 
-const PRIMAL_RELAY = 'wss://relay.primal.net'
 const B_RELAY = 'wss://relay.44billion.net'
 const CHUNK_SIZE = 51000
 const RATE_LIMIT_BACKOFF_STEP = 2000
@@ -65,8 +64,8 @@ export async function uploadApp (fileList, dTag, onProgress, stallOptions = {}) 
     writeRelays = []
   }
 
-  if (!writeRelays.includes(PRIMAL_RELAY)) {
-    writeRelays.push(PRIMAL_RELAY)
+  if (!writeRelays.includes(B_RELAY)) {
+    writeRelays.push(B_RELAY)
   }
 
   if (writeRelays.length === 0) {

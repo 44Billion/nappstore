@@ -1,6 +1,7 @@
 import { f, useStore, useTask, useSignal } from '#f'
 import '#f/components/f-to-signals.js'
 import { appEncode } from '#helpers/nostr/nip19.js'
+import { getRelaysByPubkey } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
 import { fetchFileDataUrl, deduplicateEvents } from '#services/app-metadata-fetcher.js'
 import { cssVars } from '#assets/styles/theme.js'
@@ -98,8 +99,12 @@ f('nappsIndex', function () {
 
         const iconCache = lru.ns('apps')
 
+        const stallEvents = [...eventsByKey.values()]
+        const authorPubkeys = [...new Set(stallEvents.map(e => e.pubkey))]
+        const relaysByAuthor = await getRelaysByPubkey(authorPubkeys)
+
         const newApps = await Promise.all(
-          Array.from(eventsByKey.values()).map(async (stallEvent) => {
+          stallEvents.map(async (stallEvent) => {
             try {
               const dTagArray = getTagValue(stallEvent.tags, 'd')
               if (!dTagArray?.[0]) return null
@@ -136,7 +141,7 @@ f('nappsIndex', function () {
                     pubkey: stallEvent.pubkey,
                     rootHash: iconRootHash,
                     mimeType: iconMimeType,
-                    relays: [PRIMAL_RELAY],
+                    relays: [...new Set([...relaysByAuthor[stallEvent.pubkey].write, B_RELAY])],
                     maxSizeBytes: MAX_ICON_SIZE_BYTES
                   })
 
