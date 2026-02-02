@@ -5,50 +5,124 @@ import { getRandomId } from '#helpers/misc.js'
 import { maybeUnref } from '#helpers/timer.js'
 
 const profilesByPubkey = {}
-export async function getProfile (pubkey,
-  { _nostrRelays = nostrRelays, _getRelays = getRelays, _getSvgAvatar = getSvgAvatar } = {}
+/**
+ * Fetches profiles for multiple pubkeys efficiently.
+ * Use the minimum set of relays that cover all pubkeys, limiting each pubkey to 2 relays at most.
+ */
+export async function getProfiles (pubkeys,
+  { _nostrRelays = nostrRelays, _getRelaysByPubkey = getRelaysByPubkey, _getSvgAvatar = getSvgAvatar } = {}
 ) {
-  if (profilesByPubkey[pubkey]) return profilesByPubkey[pubkey]
-  let profile
-  let isntFallback
-  try {
-    const { write: writeRelays } = await _getRelays(pubkey)
-    const { result, errors } = await _nostrRelays.getEvents({ kinds: [0], authors: [pubkey], limit: 1 }, writeRelays)
-    const event = result.sort((a, b) => b.created_at - a.created_at)[0]
-    if (!event) {
-      if (errors.length) throw new Error(errors.join('\n'))
-      isntFallback = false
-    } else {
-      profile = eventToProfile(event, { _getSvgAvatar })
-      isntFallback = true
-    }
-  } catch (err) {
-    isntFallback = false
-    console.log(err.stack)
-  }
+  const missingPubkeys = [...new Set(pubkeys)].filter(pk => !profilesByPubkey[pk])
+  if (missingPubkeys.length > 0) {
+    const relaysByAuthor = await _getRelaysByPubkey(missingPubkeys)
 
-  if (!profile) {
-    profile = {
-      name: `User#${getRandomId().slice(0, 5)}`,
-      about: '',
-      picture: `data:image/svg+xml;charset=utf-8,${
-        window.encodeURIComponent(await _getSvgAvatar(pubkey))
-      }`,
-      npub: npubEncode(pubkey),
-      meta: {
-        events: []
+    const pkToPossibleRelays = new Map()
+    for (const pk of missingPubkeys) {
+      const wr = relaysByAuthor[pk].write
+      pkToPossibleRelays.set(pk, new Set(wr.length > 0 ? wr : freeRelays.slice(0, 2)))
+    }
+
+    const uncovered = new Set(missingPubkeys)
+    const selectedRelays = new Set()
+
+    while (uncovered.size > 0) {
+      const relayCounts = new Map()
+      for (const pk of uncovered) {
+        for (const r of pkToPossibleRelays.get(pk)) {
+          relayCounts.set(r, (relayCounts.get(r) || 0) + 1)
+        }
+      }
+
+      let bestRelay = null
+      let maxCount = -1
+      for (const [r, count] of relayCounts) {
+        if (count > maxCount) {
+          maxCount = count
+          bestRelay = r
+        }
+      }
+
+      if (!bestRelay) break
+
+      selectedRelays.add(bestRelay)
+      for (const pk of [...uncovered]) {
+        if (pkToPossibleRelays.get(pk).has(bestRelay)) {
+          uncovered.delete(pk)
+        }
+      }
+    }
+
+    const relayToAuthors = new Map()
+    for (const r of selectedRelays) relayToAuthors.set(r, [])
+
+    for (const pk of missingPubkeys) {
+      let count = 0
+      for (const r of selectedRelays) {
+        if (pkToPossibleRelays.get(pk).has(r)) {
+          relayToAuthors.get(r).push(pk)
+          count++
+          if (count >= 2) break
+        }
+      }
+    }
+
+    const results = await Promise.all(
+      [...relayToAuthors.entries()]
+        .filter(([_, authors]) => authors.length > 0)
+        .map(([relay, authors]) =>
+          _nostrRelays.getEvents({ kinds: [0], authors }, [relay], 5000)
+        )
+    )
+    const allEvents = results.flatMap(r => r.result)
+
+    const latestByPk = {}
+    for (const event of allEvents) {
+      if (!latestByPk[event.pubkey] || event.created_at > latestByPk[event.pubkey].created_at) {
+        latestByPk[event.pubkey] = event
+      }
+    }
+
+    for (const pk of missingPubkeys) {
+      const event = latestByPk[pk]
+      if (event) {
+        profilesByPubkey[pk] = await eventToProfile(event, { _getSvgAvatar })
+        maybeUnref(setTimeout(
+          () => { delete profilesByPubkey[pk] },
+          3 * 60 * 1000
+        ))
       }
     }
   }
 
-  if (isntFallback) {
-    profilesByPubkey[pubkey] = profile
-    maybeUnref(setTimeout(
-      () => { delete profilesByPubkey[pubkey] },
-      3 * 60 * 1000
-    ))
+  const finalResults = {}
+  for (const pk of pubkeys) {
+    if (profilesByPubkey[pk]) {
+      finalResults[pk] = profilesByPubkey[pk]
+    } else {
+      finalResults[pk] = {
+        name: `User#${getRandomId().slice(0, 5)}`,
+        about: '',
+        picture: `data:image/svg+xml;charset=utf-8,${
+          window.encodeURIComponent(await _getSvgAvatar(pk))
+        }`,
+        npub: npubEncode(pk),
+        meta: { events: [] }
+      }
+    }
   }
-  return profile
+  return finalResults
+}
+
+// Returns the profile for a single pubkey.
+export async function getProfile (pubkey,
+  { _nostrRelays = nostrRelays, _getRelays = getRelays, _getSvgAvatar = getSvgAvatar } = {}
+) {
+  const result = await getProfiles([pubkey], {
+    _nostrRelays,
+    _getRelaysByPubkey: async (pk) => ({ [pk[0]]: await _getRelays(pk[0], { _nostrRelays }) }),
+    _getSvgAvatar
+  })
+  return result[pubkey]
 }
 export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = {}) {
   if (typeof event !== 'object' || event === null || event.kind !== 0 || typeof event.pubkey !== 'string') {

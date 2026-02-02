@@ -1,7 +1,7 @@
 import { f, useStore, useTask, useSignal } from '#f'
 import '#f/components/f-to-signals.js'
 import { appEncode } from '#helpers/nostr/nip19.js'
-import { getRelaysByPubkey } from '#helpers/nostr/queries.js'
+import { getRelaysByPubkey, getProfiles } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
 import { fetchFileDataUrl, deduplicateEvents } from '#services/app-metadata-fetcher.js'
 import { cssVars } from '#assets/styles/theme.js'
@@ -9,7 +9,6 @@ import lru from '#services/lru.js'
 import '#shared/app-icon.js'
 import '#shared/avatar.js'
 
-const PRIMAL_RELAY = 'wss://relay.primal.net'
 const B_RELAY = 'wss://relay.44billion.net'
 const APPS_PER_PAGE = 20
 const DEFAULT_BUNDLE_KIND = 37448
@@ -206,42 +205,8 @@ f('nappsIndex', function () {
       if (uniquePubkeys.length === 0) return
 
       try {
-        const { result: events } = await nostrRelays.getEvents(
-          {
-            kinds: [0],
-            authors: uniquePubkeys
-          },
-          [PRIMAL_RELAY],
-          5000
-        )
-
-        // Group by author and keep newest
-        const profilesByAuthor = events.reduce((acc, event) => {
-          if (!acc[event.pubkey] || event.created_at > acc[event.pubkey].created_at) {
-            acc[event.pubkey] = event
-          }
-          return acc
-        }, {})
-
-        // Parse and cache profiles
-        const newCache = { ...profileCache }
-        for (const [pubkey, event] of Object.entries(profilesByAuthor)) {
-          try {
-            newCache[pubkey] = JSON.parse(event.content)
-          } catch (err) {
-            console.error('Failed to parse profile:', err)
-            newCache[pubkey] = {}
-          }
-        }
-
-        // Add empty profiles for authors we couldn't find
-        for (const pubkey of uniquePubkeys) {
-          if (!newCache[pubkey]) {
-            newCache[pubkey] = {}
-          }
-        }
-
-        this.profileCache$(newCache)
+        const results = await getProfiles(uniquePubkeys)
+        this.profileCache$({ ...profileCache, ...results })
       } catch (err) {
         console.error('Failed to load profiles:', err)
       }
