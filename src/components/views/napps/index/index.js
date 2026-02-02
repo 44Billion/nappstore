@@ -32,6 +32,7 @@ f('nappsIndex', function () {
     hasMore$: true,
     oldestTimestamp$: Math.floor(Date.now() / 1000),
     profileCache$: {},
+    includingSpam$: false,
     isFirstLoad$: true,
     pendingOpenAppId$: null,
     pendingOpenTimeoutId$: null,
@@ -58,18 +59,30 @@ f('nappsIndex', function () {
       this.isLoading$(true)
 
       try {
+        const filter = {
+          kinds: [37348],
+          until: this.oldestTimestamp$(),
+          limit: APPS_PER_PAGE
+        }
+
+        if (this.includingSpam$()) {
+          filter.search = 'is:spam'
+        }
+
         // Fetch stall events (kind 37348) from 44 Billion (B) relay
         const { result: events } = await nostrRelays.getEvents(
-          {
-            kinds: [37348],
-            until: this.oldestTimestamp$(),
-            limit: APPS_PER_PAGE
-          },
+          filter,
           [B_RELAY],
           20000
         )
 
         if (events.length === 0) {
+          if (!this.includingSpam$()) {
+            this.includingSpam$(true)
+            this.oldestTimestamp$(Math.floor(Date.now() / 1000))
+            this.isLoading$(false)
+            return this.loadMoreApps()
+          }
           this.hasMore$(false)
           this.isLoading$(false)
           return
