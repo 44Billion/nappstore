@@ -22,55 +22,33 @@ export async function getProfiles (pubkeys,
       pkToPossibleRelays.set(pk, new Set(wr.length > 0 ? wr : freeRelays.slice(0, 2)))
     }
 
-    const uncovered = new Set(missingPubkeys)
-    const selectedRelays = new Set()
-
-    while (uncovered.size > 0) {
-      const relayCounts = new Map()
-      for (const pk of uncovered) {
-        for (const r of pkToPossibleRelays.get(pk)) {
-          relayCounts.set(r, (relayCounts.get(r) || 0) + 1)
-        }
-      }
-
-      let bestRelay = null
-      let maxCount = -1
-      for (const [r, count] of relayCounts) {
-        if (count > maxCount) {
-          maxCount = count
-          bestRelay = r
-        }
-      }
-
-      if (!bestRelay) break
-
-      selectedRelays.add(bestRelay)
-      for (const pk of [...uncovered]) {
-        if (pkToPossibleRelays.get(pk).has(bestRelay)) {
-          uncovered.delete(pk)
-        }
+    // Rank relays by how many pubkeys use them (most popular first)
+    const relayCounts = new Map()
+    for (const relays of pkToPossibleRelays.values()) {
+      for (const r of relays) {
+        relayCounts.set(r, (relayCounts.get(r) || 0) + 1)
       }
     }
+    const rankedRelays = [...relayCounts.keys()].sort((a, b) => relayCounts.get(b) - relayCounts.get(a))
 
+    // Assign up to 2 relays per pubkey, picking the most popular ones first
     const relayToAuthors = new Map()
-    for (const r of selectedRelays) relayToAuthors.set(r, [])
-
     for (const pk of missingPubkeys) {
-      let count = 0
-      for (const r of selectedRelays) {
-        if (pkToPossibleRelays.get(pk).has(r)) {
-          relayToAuthors.get(r).push(pk)
-          count++
-          if (count >= 2) break
-        }
+      const possibleRelays = pkToPossibleRelays.get(pk)
+      let assigned = 0
+      for (const r of rankedRelays) {
+        if (assigned >= 2) break
+        if (!possibleRelays.has(r)) continue
+        if (!relayToAuthors.has(r)) relayToAuthors.set(r, [])
+        relayToAuthors.get(r).push(pk)
+        assigned++
       }
     }
 
     const results = await Promise.all(
       [...relayToAuthors.entries()]
-        .filter(([_, authors]) => authors.length > 0)
         .map(([relay, authors]) =>
-          _nostrRelays.getEvents({ kinds: [0], authors }, [relay], 5000)
+          _nostrRelays.getEvents({ kinds: [0], authors }, [relay])
         )
     )
     const allEvents = results.flatMap(r => r.result)
@@ -190,7 +168,6 @@ export async function getRelaysByPubkey (pubkeys, { _nostrRelays = nostrRelays }
       }
     }
   }
-
   return pubkeys.reduce((acc, pubkey) => {
     acc[pubkey] = relaysByPubkey[pubkey] || { read: freeRelays.slice(0, 2), write: freeRelays.slice(0, 2), meta: { events: [] } }
     return acc

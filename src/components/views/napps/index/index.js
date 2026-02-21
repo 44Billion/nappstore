@@ -3,7 +3,7 @@ import '#f/components/f-to-signals.js'
 import { appEncode } from '#helpers/nostr/nip19.js'
 import { getRelaysByPubkey, getProfiles } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
-import { fetchFileDataUrl, deduplicateEvents } from '#services/app-metadata-fetcher.js'
+import { fetchFileDataUrl } from '#services/app-metadata-fetcher.js'
 import { cssVars } from '#assets/styles/theme.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
@@ -53,161 +53,186 @@ f('nappsIndex', function () {
       this.pendingOpenTimeoutId$(timeoutId)
     },
 
+    // Streams stall events from the relay and updates the UI as each arrives
     async loadMoreApps () {
       if (this.isLoading$() || !this.hasMore$()) return
 
       this.isLoading$(true)
 
       try {
-        const filter = {
-          kinds: [37348],
-          until: this.oldestTimestamp$(),
-          limit: APPS_PER_PAGE
-        }
+        let retryWithSpam = true
 
-        if (this.includingSpam$()) {
-          filter.search = 'is:spam'
-        }
+        while (retryWithSpam) {
+          retryWithSpam = false
 
-        // Fetch stall events (kind 37348) from 44 Billion (B) relay
-        const { result: events } = await nostrRelays.getEvents(
-          filter,
-          [B_RELAY],
-          20000
-        )
+          const filter = {
+            kinds: [37348],
+            until: this.oldestTimestamp$(),
+            limit: APPS_PER_PAGE
+          }
 
-        if (events.length === 0) {
-          if (!this.includingSpam$()) {
+          if (this.includingSpam$()) {
+            filter.search = 'is:spam'
+          }
+
+          const existingKeys = new Set(
+            this.apps$().map(app => `${app.pubkey}:${app.dTag}`)
+          )
+          const pendingStallEvents = []
+          let rawEventCount = 0
+          let newAppCount = 0
+          let oldestCreatedAt = this.oldestTimestamp$()
+
+          // Stream events from the relay, adding apps to the UI as they arrive
+          const generator = nostrRelays.getEventsGenerator(
+            filter,
+            [B_RELAY],
+            { timeout: 20000 }
+          )
+
+          for await (const item of generator) {
+            if (item.type !== 'event') continue
+            const event = item.event
+            rawEventCount++
+
+            if (event.created_at < oldestCreatedAt) {
+              oldestCreatedAt = event.created_at
+            }
+
+            const dTagValue = getTagValue(event.tags, 'd')?.[0]
+            if (!dTagValue) continue
+
+            const key = `${event.pubkey}:${dTagValue}`
+            if (existingKeys.has(key)) continue
+            existingKeys.add(key)
+
+            const app = this.createAppFromStallEvent(event)
+            if (!app) continue
+            newAppCount++
+            pendingStallEvents.push(event)
+
+            // Append to store immediately so the UI refreshes per event
+            this.apps$([...this.apps$(), app])
+          }
+
+          // Update pagination cursor
+          if (rawEventCount > 0) {
+            this.oldestTimestamp$(oldestCreatedAt - 1)
+          }
+
+          const seemsExhausted = rawEventCount === 0 ||
+            (newAppCount < APPS_PER_PAGE / 2 && rawEventCount < APPS_PER_PAGE)
+
+          if (seemsExhausted && !this.includingSpam$()) {
+            // Non-spam appears exhausted, retry including spam-flagged events
             this.includingSpam$(true)
             this.oldestTimestamp$(Math.floor(Date.now() / 1000))
-            this.isLoading$(false)
-            return this.loadMoreApps()
+            retryWithSpam = true
+            continue
           }
-          this.hasMore$(false)
-          this.isLoading$(false)
-          return
-        }
 
-        // Update oldest timestamp for pagination
-        const oldestEvent = events[events.length - 1]
-        this.oldestTimestamp$(oldestEvent.created_at - 1)
+          if (seemsExhausted) {
+            this.hasMore$(false)
+          }
 
-        const dedupedEvents = deduplicateEvents(events).sort((a, b) => b.created_at - a.created_at)
-
-        const existingApps = this.apps$()
-        const existingKeys = new Set(existingApps.map(app => `${app.pubkey}:${app.dTag}`))
-        const eventsByKey = new Map()
-
-        for (const event of dedupedEvents) {
-          const dTagValue = getTagValue(event.tags, 'd')?.[0]
-          if (!dTagValue) continue
-
-          const key = `${event.pubkey}:${dTagValue}`
-          if (existingKeys.has(key)) continue
-          if (!eventsByKey.has(key)) {
-            eventsByKey.set(key, event)
+          // Fetch icons and profiles in the background (fire-and-forget)
+          if (pendingStallEvents.length > 0) {
+            this.fetchIconsAndProfiles(pendingStallEvents)
           }
         }
 
-        const iconCache = lru.ns('apps')
-
-        const stallEvents = [...eventsByKey.values()]
-        const authorPubkeys = [...new Set(stallEvents.map(e => e.pubkey))]
-        const relaysByAuthor = await getRelaysByPubkey(authorPubkeys)
-
-        const newApps = await Promise.all(
-          stallEvents.map(async (stallEvent) => {
-            try {
-              const dTagArray = getTagValue(stallEvent.tags, 'd')
-              if (!dTagArray?.[0]) return null
-              const dTag = dTagArray[0]
-
-              const channelTag = getTagValue(stallEvent.tags, 'c')
-              const channelValue = trimOrEmpty(channelTag?.[0]).toLowerCase()
-
-              let bundleKind = DEFAULT_BUNDLE_KIND
-              if (channelValue === 'next') bundleKind = 37449
-              if (channelValue === 'draft') bundleKind = 37450
-
-              const encodedApp = appEncode({
-                dTag,
-                pubkey: stallEvent.pubkey,
-                kind: bundleKind
-              })
-
-              const nameTag = getTagValue(stallEvent.tags, 'name')
-              const summaryTag = getTagValue(stallEvent.tags, 'summary')
-              const iconTag = getTagValue(stallEvent.tags, 'icon')
-
-              let icon = null
-
-              if (iconTag?.[0]) {
-                const [iconRootHash, iconMimeType] = iconTag
-                const cacheKey = `appById_${encodedApp}_icon`
-                const cachedIcon = iconCache.getItem(cacheKey)
-
-                if (cachedIcon?.fx === iconRootHash && cachedIcon?.url) {
-                  icon = cachedIcon
-                } else {
-                  const iconUrl = await fetchFileDataUrl({
-                    pubkey: stallEvent.pubkey,
-                    rootHash: iconRootHash,
-                    mimeType: iconMimeType,
-                    relays: [...new Set([...relaysByAuthor[stallEvent.pubkey].write, B_RELAY])],
-                    maxSizeBytes: MAX_ICON_SIZE_BYTES
-                  })
-
-                  if (iconUrl) {
-                    icon = { fx: iconRootHash, url: iconUrl }
-                    try {
-                      iconCache.setItem(cacheKey, icon)
-                    } catch (err) {
-                      console.error('Failed to cache icon:', err)
-                    }
-                  } else if (cachedIcon?.url) {
-                    icon = { fx: iconRootHash, url: cachedIcon.url }
-                  }
-                }
-              }
-
-              const trimmedName = trimOrEmpty(nameTag?.[0])
-              const trimmedSummary = trimOrEmpty(summaryTag?.[0])
-
-              return {
-                id: encodedApp,
-                dTag,
-                pubkey: stallEvent.pubkey,
-                kind: bundleKind,
-                name: trimmedName || dTag,
-                description: trimmedSummary || 'No description',
-                icon,
-                uploadedAt: stallEvent.created_at * 1000
-              }
-            } catch (error) {
-              console.error('Failed to process stall event:', error)
-              return null
-            }
-          })
-        )
-
-        const validApps = newApps.filter(app => app !== null)
-
-        // Fetch profiles for authors
-        await this.loadProfiles(validApps.map(app => app.pubkey))
-
-        // Append to existing apps
-        this.apps$([...existingApps, ...validApps])
-
-        if (validApps.length < APPS_PER_PAGE / 2 && events.length < APPS_PER_PAGE) {
-          this.hasMore$(false)
-        }
-
-        // After first load, set isFirstLoad to false
         this.isFirstLoad$(false)
       } catch (err) {
         console.error('Failed to load apps:', err)
       } finally {
         this.isLoading$(false)
+      }
+    },
+
+    // Builds a lightweight app object from a stall event (no icon yet)
+    createAppFromStallEvent (stallEvent) {
+      const dTagArray = getTagValue(stallEvent.tags, 'd')
+      if (!dTagArray?.[0]) return null
+      const dTag = dTagArray[0]
+
+      const channelTag = getTagValue(stallEvent.tags, 'c')
+      const channelValue = trimOrEmpty(channelTag?.[0]).toLowerCase()
+
+      let bundleKind = DEFAULT_BUNDLE_KIND
+      if (channelValue === 'next') bundleKind = 37449
+      if (channelValue === 'draft') bundleKind = 37450
+
+      const encodedApp = appEncode({
+        dTag,
+        pubkey: stallEvent.pubkey,
+        kind: bundleKind
+      })
+
+      const nameTag = getTagValue(stallEvent.tags, 'name')
+      const summaryTag = getTagValue(stallEvent.tags, 'summary')
+      const iconTag = getTagValue(stallEvent.tags, 'icon')
+
+      return {
+        id: encodedApp,
+        dTag,
+        pubkey: stallEvent.pubkey,
+        kind: bundleKind,
+        name: trimOrEmpty(nameTag?.[0]) || dTag,
+        description: trimOrEmpty(summaryTag?.[0]) || 'No description',
+        iconFx: iconTag?.[0] || null,
+        uploadedAt: stallEvent.created_at * 1000
+      }
+    },
+
+    // Background task: fetches relay metadata, profiles, and icons for a batch of stall events
+    async fetchIconsAndProfiles (stallEvents) {
+      try {
+        const authorPubkeys = [...new Set(stallEvents.map(e => e.pubkey))]
+
+        const [relaysByAuthor] = await Promise.all([
+          getRelaysByPubkey(authorPubkeys),
+          this.loadProfiles(authorPubkeys)
+        ])
+
+        const iconCache = lru.ns('apps')
+
+        await Promise.all(
+          stallEvents.map(async (stallEvent) => {
+            try {
+              const iconTag = getTagValue(stallEvent.tags, 'icon')
+              if (!iconTag?.[0]) return
+
+              const [iconRootHash, iconMimeType] = iconTag
+              const app = this.createAppFromStallEvent(stallEvent)
+              if (!app) return
+
+              const cacheKey = `appById_${app.id}_icon`
+              const cachedIcon = iconCache.getItem(cacheKey)
+
+              if (cachedIcon?.fx === iconRootHash && cachedIcon?.url) return
+
+              const iconUrl = await fetchFileDataUrl({
+                pubkey: stallEvent.pubkey,
+                rootHash: iconRootHash,
+                mimeType: iconMimeType,
+                relays: [...new Set([...relaysByAuthor[stallEvent.pubkey].write, B_RELAY])],
+                maxSizeBytes: MAX_ICON_SIZE_BYTES
+              })
+
+              if (iconUrl) {
+                try {
+                  iconCache.setItem(cacheKey, { fx: iconRootHash, url: iconUrl })
+                } catch (err) {
+                  console.error('Failed to cache icon:', err)
+                }
+              }
+            } catch (err) {
+              console.error('Failed to fetch icon:', err)
+            }
+          })
+        )
+      } catch (err) {
+        console.error('Failed to fetch icons and profiles:', err)
       }
     },
 
@@ -330,7 +355,7 @@ f('nappsIndex', function () {
             key=${key}
             props=${{
               from: ['app'],
-              app: { id: app.id, index: index + 1 },
+              app: { id: app.id, index: index + 1, fx: app.iconFx },
               render: props => this.h`
                 <div
                   onclick=${() => store.handleOpenApp(app)}
