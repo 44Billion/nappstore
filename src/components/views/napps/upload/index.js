@@ -7,7 +7,7 @@ import {
   fileToDataUrl,
   fileToText
 } from '#services/app-metadata.js'
-import { uploadApp, getDTag } from '#services/app-uploader.js'
+import publishApp from 'nappup'
 import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
 import { appEncode } from '#helpers/nostr/nip19.js'
@@ -26,7 +26,7 @@ f('nappsUpload', function () {
     selectedFolder$: null,
     isUploading$: false,
     uploadError$: null,
-    uploadProgress$: { filesProgress: 0, totalFiles: 0, chunkProgress: 0, status: '' },
+    uploadProgress$: { progress: 0, status: '' },
     myApps$: [],
     isLoadingApps$: false,
     // myApps$: [
@@ -81,19 +81,15 @@ f('nappsUpload', function () {
 
       store.isUploading$(true)
       store.uploadError$(null)
-      store.uploadProgress$({ filesProgress: 0, totalFiles: 0, chunkProgress: 0, status: '' })
+      store.uploadProgress$({ progress: 0, status: '' })
 
       try {
+        // Extract metadata for pre-upload UI preview
         const indexFile = findIndexFile(files)
         const htmlContent = await fileToText(indexFile)
         const { name, description } = extractHtmlMetadata(htmlContent)
         const faviconFile = findFavicon(files)
-        const faviconUrl = await fileToDataUrl(faviconFile)
-        const resolveRelativePath = (file) => file.webkitRelativePath?.split('/').slice(1).join('/') || file.name
-        const faviconRelativePath = faviconFile ? resolveRelativePath(faviconFile) : null
-
-        const folderName = files[0].webkitRelativePath.split('/')[0].trim()
-        const dTag = await getDTag(files, folderName)
+        const faviconUrl = faviconFile ? await fileToDataUrl(faviconFile) : null
 
         if (!name) {
           showToast(
@@ -105,31 +101,36 @@ f('nappsUpload', function () {
           return
         }
 
+        const folderName = files[0].webkitRelativePath.split('/')[0].trim()
+
         store.currentUploadingApp$({
-          dTag,
-          name: name || dTag,
+          dTag: folderName,
+          name: name || folderName,
           description: description || 'No description',
           icon: faviconUrl
         })
 
-        await uploadApp(files, dTag, (progress) => {
-          store.uploadProgress$(progress)
-        }, {
-          name,
-          summary: description,
-          iconRelativePath: faviconRelativePath
+        let encodedApp
+        await publishApp(files, null, {
+          onEvent (event) {
+            store.uploadProgress$({ progress: event.progress, status: event.type })
+            if (event.type === 'init') {
+              store.uploadProgress$({ progress: 0, status: '', totalFiles: event.totalFiles, filesProgress: 0 })
+            }
+            if (event.type === 'file-uploaded') {
+              const prev = store.uploadProgress$()
+              store.uploadProgress$({ ...prev, filesProgress: (prev.filesProgress || 0) + 1 })
+            }
+            if (event.type === 'complete') {
+              encodedApp = event.napp
+            }
+          }
         })
 
-        // Get user's pubkey for generating the app URL
         const pubkey = await maybePeekPublicKey()
-        const encodedApp = appEncode({
-          dTag,
-          pubkey,
-          kind: 37448
-        })
 
         // Store icon in sessionStorage for app-icon component
-        if (faviconUrl) {
+        if (faviconUrl && encodedApp) {
           try {
             lru.ns('apps').setItem(`appById_${encodedApp}_icon`, { url: faviconUrl })
           } catch (err) {
@@ -141,9 +142,9 @@ f('nappsUpload', function () {
         const existingIndex = myApps.findIndex(a => a.id === encodedApp)
         const appInfo = {
           id: encodedApp,
-          dTag,
+          dTag: folderName,
           pubkey,
-          name: name || dTag,
+          name: name || folderName,
           description: description || 'No description',
           icon: faviconUrl,
           uploadedAt: Date.now()
@@ -159,7 +160,7 @@ f('nappsUpload', function () {
         store.selectedFolder$(null)
         store.currentUploadingApp$(null)
 
-        showToast(`App "${name || dTag}" uploaded successfully!`, 'success', 8000)
+        showToast(`App "${name || folderName}" uploaded successfully!`, 'success', 8000)
 
         // Reset form
         const folderInput = document.getElementById('folder-input')
@@ -285,9 +286,7 @@ f('nappsUpload', function () {
   const uploadError = store.uploadError$()
   const currentUploadingApp = store.currentUploadingApp$()
 
-  const overallProgress = uploadProgress.totalFiles > 0
-    ? Math.round((uploadProgress.filesProgress / uploadProgress.totalFiles) * 100)
-    : 0
+  const overallProgress = uploadProgress.progress || 0
 
   return this.h`
     <div style=${{
@@ -433,7 +432,7 @@ f('nappsUpload', function () {
                       gap: '8px'
                     }}>
             <div style=${{ fontSize: '12px', color: cssVars.colors.fg2 }}>
-              Uploading... ${uploadProgress.filesProgress}/${uploadProgress.totalFiles} files
+              Uploading... ${overallProgress}%
             </div>
             <div style=${{
               width: '100%',
@@ -449,15 +448,6 @@ f('nappsUpload', function () {
               transition: 'width 0.3s'
             }} />
             </div>
-            ${
-              uploadProgress.chunkProgress > 0
-                ? this.h`
-                          <div style=${{ fontSize: '11px', color: cssVars.colors.fg2 }}>
-                            File progress: ${uploadProgress.chunkProgress}%
-                          </div>
-                        `
-                : ''
-            }
             ${
               uploadProgress.status
                 ? this.h`
@@ -547,9 +537,7 @@ f('nappsUpload', function () {
                 ? this.h`
                   ${myApps.map((app, index) => {
                     const isCurrentlyUploading = currentUploadingApp && currentUploadingApp.dTag === app.dTag
-                    const progressPercent = uploadProgress.totalFiles > 0
-                      ? Math.round((uploadProgress.filesProgress / uploadProgress.totalFiles) * 100)
-                      : 0
+                    const progressPercent = overallProgress
                     const borderColor = isCurrentlyUploading ? cssVars.colors.bgSelected : 'none' // cssVars.colors.bg2
 
                     const encodedApp = appEncode({
