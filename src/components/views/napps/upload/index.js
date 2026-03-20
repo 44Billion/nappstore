@@ -10,7 +10,7 @@ import {
 import publishApp from 'nappup'
 import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
-import { appEncode } from '#helpers/nostr/nip19.js'
+import { appEncode, appDecode } from '#helpers/nostr/nip19.js'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import nostrRelays from '#services/nostr-relays.js'
 import { getRelays } from '#helpers/nostr/queries.js'
@@ -127,7 +127,7 @@ f('nappsUpload', function () {
           }
         })
 
-        const pubkey = await maybePeekPublicKey()
+        const { dTag, pubkey } = appDecode(encodedApp)
 
         // Store icon in sessionStorage for app-icon component
         if (faviconUrl && encodedApp) {
@@ -142,9 +142,9 @@ f('nappsUpload', function () {
         const existingIndex = myApps.findIndex(a => a.id === encodedApp)
         const appInfo = {
           id: encodedApp,
-          dTag: folderName,
+          dTag,
           pubkey,
-          name: name || folderName,
+          name: name || dTag,
           description: description || 'No description',
           icon: faviconUrl,
           uploadedAt: Date.now()
@@ -160,7 +160,7 @@ f('nappsUpload', function () {
         store.selectedFolder$(null)
         store.currentUploadingApp$(null)
 
-        showToast(`App "${name || folderName}" uploaded successfully!`, 'success', 8000)
+        showToast(`App "${name || dTag}" uploaded successfully!`, 'success', 8000)
 
         // Reset form
         const folderInput = document.getElementById('folder-input')
