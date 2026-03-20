@@ -2,6 +2,7 @@ import { Relay } from '#helpers/nostr/relay.js'
 import { maybeUnref } from '#helpers/timer.js'
 
 export const seedRelays = [
+  'wss://relay.44billion.net',
   'wss://purplepag.es',
   'wss://user.kindpag.es',
   'wss://relay.nos.social',
