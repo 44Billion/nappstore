@@ -1,4 +1,4 @@
-// Fetches app metadata (name, description, icon) from Nostr relays by reconstructing files from chunks
+// Fetches app metadata (name, description, icon) from Nostr relays or Blossom servers
 
 import nostrRelays from '#services/nostr-relays.js'
 import { decode as base93Decode } from '#services/base93-decoder.js'
@@ -27,30 +27,68 @@ export function deduplicateEvents (events) {
   return [...eventMap.values()]
 }
 
-// Fetch and reconstruct a file from its chunks
+function getServiceFromEvent (event) {
+  const serviceTag = event.tags.find(t => t[0] === 'service')
+  return serviceTag?.[1] || 'blossom'
+}
+
+function normalizePath (path) {
+  if (!path) return path
+  return path.startsWith('/') ? path.slice(1) : path
+}
+
+// Get file metadata from a site manifest event
+// Format: ["path", path, hash] — path should have a leading "/" but we normalize without it
+function getFileFromManifest (manifestEvent, pathPredicate) {
+  const pathTag = manifestEvent.tags.find(t =>
+    t[0] === 'path' && t[1] && t[2] && pathPredicate(normalizePath(t[1]))
+  )
+
+  if (!pathTag) return null
+
+  return {
+    path: normalizePath(pathTag[1]),
+    hash: pathTag[2]
+  }
+}
+
+// Fetch a file from a blossom server given its hash
+async function fetchFromBlossom (hash, blossomServers) {
+  for (const server of blossomServers) {
+    try {
+      const url = `${server.replace(/\/$/, '')}/${hash}`
+      const response = await fetch(url)
+      if (response.ok) return response
+    } catch (_err) {
+      continue
+    }
+  }
+  return null
+}
+
+// Build a blossom URL for a file hash (uses first available server)
+function buildBlossomUrl (hash, blossomServers) {
+  if (!blossomServers || blossomServers.length === 0) return null
+  return `${blossomServers[0].replace(/\/$/, '')}/${hash}`
+}
+
+// Fetch and reconstruct a file from its IRFS chunks
 async function fetchFileFromChunks (pubkey, fileRootHash, relays, maxSizeBytes = null) {
   // Calculate max chunks to fetch based on size limit
   let maxChunksToFetch = null
   if (maxSizeBytes !== null) {
-    // Calculate how many chunks we can afford (each chunk is ~51000 bytes)
-    // We'll fetch one extra chunk to determine if there are more chunks than allowed
     maxChunksToFetch = Math.floor(maxSizeBytes / 51000) + 1
   }
 
-  // Create array of c tag values to fetch
-  // Format: ["rootHash:0", "rootHash:1", ..., "rootHash:maxChunksToFetch-1"]
   let cTagValues = []
   if (maxChunksToFetch !== null) {
-    // Fetch specific range of chunks
     for (let i = 0; i < maxChunksToFetch; i++) {
       cTagValues.push(`${fileRootHash}:${i}`)
     }
   } else {
-    // If no size limit, fetch first chunk to determine total count
     cTagValues = [`${fileRootHash}:0`]
   }
 
-  // Fetch chunk events for this file using c tag filtering
   const { result: chunkEvents } = await nostrRelays.getEvents(
     {
       kinds: [34600],
@@ -63,27 +101,21 @@ async function fetchFileFromChunks (pubkey, fileRootHash, relays, maxSizeBytes =
 
   if (chunkEvents.length === 0) return null
 
-  // Deduplicate events by their NIP-01 address
   const deduplicatedEvents = deduplicateEvents(chunkEvents)
 
-  // Check if we have more chunks than allowed based on maxSizeBytes
-  // This check should be done early to avoid unnecessary processing
   if (maxSizeBytes !== null) {
     const maxAllowedChunks = maxChunksToFetch - 1
-
-    // If we fetched maxChunksToFetch and got that many chunks, the file is too large
     if (deduplicatedEvents.length >= maxAllowedChunks) {
-      console.log(`File exceeds size limit: at least ${deduplicatedEvents.length} chunks > ${maxAllowedChunks} chunks (${deduplicatedEvents.length * 51000} bytes > ${maxSizeBytes} bytes)`)
+      console.log(`File exceeds size limit: at least ${deduplicatedEvents.length} chunks > ${maxAllowedChunks} chunks`)
       return null
     }
   }
 
-  // Extract total chunk count from any chunk's c tag (third element)
   let totalChunks = null
   for (const event of deduplicatedEvents) {
     const cTag = event.tags.find(t => t[0] === 'c' && t[1].startsWith(`${fileRootHash}:`))
     if (cTag && cTag.length > 2) {
-      totalChunks = cTag[2] // Third element contains the total number of chunks
+      totalChunks = cTag[2]
       try {
         totalChunks = parseInt(totalChunks, 10)
         if (isNaN(totalChunks) || totalChunks <= 0) totalChunks = null
@@ -92,15 +124,12 @@ async function fetchFileFromChunks (pubkey, fileRootHash, relays, maxSizeBytes =
     }
   }
 
-  // Validate that we have the total chunk count
   if (totalChunks === null) {
     console.log('Unable to determine total chunk count from chunk events')
     return null
   }
 
-  // If we only fetched the first chunk to determine count, now fetch all chunks
   if (maxChunksToFetch === null && totalChunks !== null) {
-    // Now fetch all chunks
     cTagValues = []
     for (let i = 1; i < totalChunks; i++) {
       cTagValues.push(`${fileRootHash}:${i}`)
@@ -116,13 +145,10 @@ async function fetchFileFromChunks (pubkey, fileRootHash, relays, maxSizeBytes =
       relays
     )
 
-    // Deduplicate all events
     const allDeduplicatedEvents = deduplicateEvents(allChunkEvents)
     deduplicatedEvents.push(...allDeduplicatedEvents)
   }
 
-  // Sort chunks by their c tag (format: "rootHash:index")
-  // Extract all c tags and sort by index
   const chunks = []
   for (const event of deduplicatedEvents) {
     const cTags = event.tags.filter(t => t[0] === 'c' && t[1])
@@ -137,16 +163,13 @@ async function fetchFileFromChunks (pubkey, fileRootHash, relays, maxSizeBytes =
     }
   }
 
-  // Validate that all chunks are present (contiguous from 0 to totalChunks-1)
   if (chunks.length !== totalChunks) {
     console.log(`Missing chunks: expected ${totalChunks} chunks, got ${chunks.length}`)
     return null
   }
 
-  // Sort by index
   chunks.sort((a, b) => a.index - b.index)
 
-  // Validate that chunk indexes are contiguous
   for (let i = 0; i < chunks.length; i++) {
     if (chunks[i].index !== i) {
       console.log(`Non-contiguous chunk indexes: expected index ${i}, got ${chunks[i].index}`)
@@ -154,12 +177,10 @@ async function fetchFileFromChunks (pubkey, fileRootHash, relays, maxSizeBytes =
     }
   }
 
-  // Decode chunks from base93
   const binaryChunks = chunks.map(chunk => base93Decode(chunk.content))
   return binaryChunks
 }
 
-// Convert binary chunks to text
 function chunksToText (binaryChunks) {
   const blob = new Blob(binaryChunks, { type: 'text/html' })
   return new Promise((resolve, reject) => {
@@ -170,7 +191,6 @@ function chunksToText (binaryChunks) {
   })
 }
 
-// Convert binary chunks to data URL
 function chunksToDataUrl (binaryChunks, mimeType) {
   const blob = new Blob(binaryChunks, { type: mimeType })
   return new Promise((resolve, reject) => {
@@ -181,7 +201,7 @@ function chunksToDataUrl (binaryChunks, mimeType) {
   })
 }
 
-// Fetch a file from Nostr relays and convert it to a data URL
+// Fetch a file and convert it to a data URL (IRFS only)
 export async function fetchFileDataUrl ({ pubkey, rootHash, relays, mimeType, maxSizeBytes = null }) {
   if (!pubkey || !rootHash || !Array.isArray(relays) || relays.length === 0) {
     return null
@@ -197,24 +217,10 @@ export async function fetchFileDataUrl ({ pubkey, rootHash, relays, mimeType, ma
   }
 }
 
-// Get file metadata from bundle event
-function getFileFromBundle (bundleEvent, filenamePredicate) {
-  const fileTag = bundleEvent.tags.find(t =>
-    t[0] === 'file' && t[1] && t[2] && filenamePredicate(t[2])
-  )
-
-  if (!fileTag) return null
-
-  return {
-    rootHash: fileTag[1],
-    filename: fileTag[2],
-    mimeType: fileTag[3] || 'application/octet-stream'
-  }
-}
-
-// Fetch app metadata from relays
-export async function fetchAppMetadata (bundleEvent, relays) {
-  const pubkey = bundleEvent.pubkey
+// Fetch app metadata from a site manifest event
+export async function fetchAppMetadata (manifestEvent, relays, { blossomServers } = {}) {
+  const pubkey = manifestEvent.pubkey
+  const service = getServiceFromEvent(manifestEvent)
   const metadata = {
     name: null,
     description: null,
@@ -222,42 +228,60 @@ export async function fetchAppMetadata (bundleEvent, relays) {
   }
 
   try {
-    // Find index.html file
-    const indexFile = getFileFromBundle(bundleEvent, filename =>
-      filename === 'index.html' || filename === 'index.htm'
+    // Find index.html
+    const indexFile = getFileFromManifest(manifestEvent, path =>
+      path === 'index.html' || path === 'index.htm'
     )
 
     if (indexFile) {
-      // Fetch and reconstruct index.html
-      const indexChunks = await fetchFileFromChunks(pubkey, indexFile.rootHash, relays)
-
-      if (indexChunks) {
-        const htmlContent = await chunksToText(indexChunks)
-        const extracted = extractHtmlMetadata(htmlContent)
-
-        metadata.name = extracted.name
-        metadata.description = extracted.description
+      if (service === 'blossom' && blossomServers && blossomServers.length > 0) {
+        const response = await fetchFromBlossom(indexFile.hash, blossomServers)
+        if (response) {
+          const htmlContent = await response.text()
+          const extracted = extractHtmlMetadata(htmlContent)
+          metadata.name = extracted.name
+          metadata.description = extracted.description
+        }
+      } else {
+        // IRFS: reconstruct from chunks
+        const indexChunks = await fetchFileFromChunks(pubkey, indexFile.hash, relays)
+        if (indexChunks) {
+          const htmlContent = await chunksToText(indexChunks)
+          const extracted = extractHtmlMetadata(htmlContent)
+          metadata.name = extracted.name
+          metadata.description = extracted.description
+        }
       }
     }
 
     // Find favicon file
-    const faviconFile = getFileFromBundle(bundleEvent, filename =>
-      /^favicon\.(ico|svg|webp|png|jpg|jpeg|gif)$/i.test(filename)
-    )
+    const faviconFile = getFileFromManifest(manifestEvent, path => {
+      const filename = path.split('/').pop()
+      return /^favicon\.(ico|svg|webp|png|jpg|jpeg|gif)$/i.test(filename)
+    })
 
     if (faviconFile) {
-      // Fetch and reconstruct favicon with 5.5MB size limit
-      const MAX_ICON_SIZE = 5.5 * 1024 * 1024 // 5.5MB
-      const faviconChunks = await fetchFileFromChunks(
-        pubkey,
-        faviconFile.rootHash,
-        relays,
-        MAX_ICON_SIZE
-      )
+      if (service === 'blossom' && blossomServers && blossomServers.length > 0) {
+        const url = buildBlossomUrl(faviconFile.hash, blossomServers)
+        if (url) {
+          metadata.icon = { fx: faviconFile.hash, url }
+        }
+      } else {
+        // IRFS: reconstruct from chunks
+        const MAX_ICON_SIZE = 5.5 * 1024 * 1024
+        const faviconChunks = await fetchFileFromChunks(
+          pubkey,
+          faviconFile.hash,
+          relays,
+          MAX_ICON_SIZE
+        )
 
-      if (faviconChunks) {
-        const dataUrl = await chunksToDataUrl(faviconChunks, faviconFile.mimeType)
-        metadata.icon = { fx: faviconFile.rootHash, url: dataUrl }
+        if (faviconChunks) {
+          const ext = faviconFile.path.split('.').pop()?.toLowerCase()
+          const mimeType = { ico: 'image/x-icon', svg: 'image/svg+xml', webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif' }[ext] || 'image/png'
+          const dataUrl = await chunksToDataUrl(faviconChunks, mimeType)
+          metadata.icon = { fx: faviconFile.hash, url: dataUrl }
+        }
       }
     }
   } catch (error) {

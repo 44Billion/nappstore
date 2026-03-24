@@ -1,7 +1,7 @@
 import { f, useStore, useTask, useSignal } from '#f'
 import '#f/components/f-to-signals.js'
 import { appEncode } from '#helpers/nostr/nip19.js'
-import { getRelaysByPubkey, getProfiles } from '#helpers/nostr/queries.js'
+import { getRelaysByPubkey, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
 import { fetchFileDataUrl } from '#services/app-metadata-fetcher.js'
 import { cssVars } from '#assets/styles/theme.js'
@@ -11,7 +11,7 @@ import '#shared/avatar.js'
 
 const B_RELAY = 'wss://relay.44billion.net'
 const APPS_PER_PAGE = 20
-const DEFAULT_BUNDLE_KIND = 37448
+const DEFAULT_MANIFEST_KIND = 35128
 const MAX_ICON_SIZE_BYTES = 5.5 * 1024 * 1024
 
 function getTagValue (tags, key) {
@@ -53,7 +53,7 @@ f('nappsIndex', function () {
       this.pendingOpenTimeoutId$(timeoutId)
     },
 
-    // Streams stall events from the relay and updates the UI as each arrives
+    // Streams app listing events from the relay and updates the UI as each arrives
     async loadMoreApps () {
       if (this.isLoading$() || !this.hasMore$()) return
 
@@ -78,7 +78,7 @@ f('nappsIndex', function () {
           const existingKeys = new Set(
             this.apps$().map(app => `${app.pubkey}:${app.dTag}`)
           )
-          const pendingStallEvents = []
+          const pendingListingEvents = []
           let rawEventCount = 0
           let newAppCount = 0
           let oldestCreatedAt = this.oldestTimestamp$()
@@ -106,10 +106,10 @@ f('nappsIndex', function () {
             if (existingKeys.has(key)) continue
             existingKeys.add(key)
 
-            const app = this.createAppFromStallEvent(event)
+            const app = this.createAppFromListingEvent(event)
             if (!app) continue
             newAppCount++
-            pendingStallEvents.push(event)
+            pendingListingEvents.push(event)
 
             // Append to store immediately so the UI refreshes per event
             this.apps$([...this.apps$(), app])
@@ -136,8 +136,8 @@ f('nappsIndex', function () {
           }
 
           // Fetch icons and profiles in the background (fire-and-forget)
-          if (pendingStallEvents.length > 0) {
-            this.fetchIconsAndProfiles(pendingStallEvents)
+          if (pendingListingEvents.length > 0) {
+            this.fetchIconsAndProfiles(pendingListingEvents)
           }
         }
 
@@ -149,61 +149,62 @@ f('nappsIndex', function () {
       }
     },
 
-    // Builds a lightweight app object from a stall event (no icon yet)
-    createAppFromStallEvent (stallEvent) {
-      const dTagArray = getTagValue(stallEvent.tags, 'd')
+    // Builds a lightweight app object from an app listing event (no icon yet)
+    createAppFromListingEvent (listingEvent) {
+      const dTagArray = getTagValue(listingEvent.tags, 'd')
       if (!dTagArray?.[0]) return null
       const dTag = dTagArray[0]
 
-      const channelTag = getTagValue(stallEvent.tags, 'c')
+      const channelTag = getTagValue(listingEvent.tags, 'c')
       const channelValue = trimOrEmpty(channelTag?.[0]).toLowerCase()
 
-      let bundleKind = DEFAULT_BUNDLE_KIND
-      if (channelValue === 'next') bundleKind = 37449
-      if (channelValue === 'draft') bundleKind = 37450
+      let bundleKind = DEFAULT_MANIFEST_KIND
+      if (channelValue === 'next') bundleKind = 35129
+      if (channelValue === 'draft') bundleKind = 35130
 
       const encodedApp = appEncode({
         dTag,
-        pubkey: stallEvent.pubkey,
+        pubkey: listingEvent.pubkey,
         kind: bundleKind
       })
 
-      const nameTag = getTagValue(stallEvent.tags, 'name')
-      const summaryTag = getTagValue(stallEvent.tags, 'summary')
-      const iconTag = getTagValue(stallEvent.tags, 'icon')
+      const nameTag = getTagValue(listingEvent.tags, 'name')
+      const summaryTag = getTagValue(listingEvent.tags, 'summary')
+      const iconTag = getTagValue(listingEvent.tags, 'icon')
 
       return {
         id: encodedApp,
         dTag,
-        pubkey: stallEvent.pubkey,
+        pubkey: listingEvent.pubkey,
         kind: bundleKind,
         name: trimOrEmpty(nameTag?.[0]) || dTag,
         description: trimOrEmpty(summaryTag?.[0]) || 'No description',
         iconFx: iconTag?.[0] || null,
-        uploadedAt: stallEvent.created_at * 1000
+        uploadedAt: listingEvent.created_at * 1000
       }
     },
 
-    // Background task: fetches relay metadata, profiles, and icons for a batch of stall events
-    async fetchIconsAndProfiles (stallEvents) {
+    // Background task: fetches profiles and icons for a batch of app listing events
+    async fetchIconsAndProfiles (listingEvents) {
       try {
-        const authorPubkeys = [...new Set(stallEvents.map(e => e.pubkey))]
+        const authorPubkeys = [...new Set(listingEvents.map(e => e.pubkey))]
 
-        const [relaysByAuthor] = await Promise.all([
+        const [relaysByAuthor, blossomServersByAuthor] = await Promise.all([
           getRelaysByPubkey(authorPubkeys),
+          getBlossomServersByPubkey(authorPubkeys),
           this.loadProfiles(authorPubkeys)
         ])
 
         const iconCache = lru.ns('apps')
 
         await Promise.all(
-          stallEvents.map(async (stallEvent) => {
+          listingEvents.map(async (listingEvent) => {
             try {
-              const iconTag = getTagValue(stallEvent.tags, 'icon')
+              const iconTag = getTagValue(listingEvent.tags, 'icon')
               if (!iconTag?.[0]) return
 
               const [iconRootHash, iconMimeType] = iconTag
-              const app = this.createAppFromStallEvent(stallEvent)
+              const app = this.createAppFromListingEvent(listingEvent)
               if (!app) return
 
               const cacheKey = `appById_${app.id}_icon`
@@ -211,13 +212,24 @@ f('nappsIndex', function () {
 
               if (cachedIcon?.fx === iconRootHash && cachedIcon?.url) return
 
-              const iconUrl = await fetchFileDataUrl({
-                pubkey: stallEvent.pubkey,
-                rootHash: iconRootHash,
-                mimeType: iconMimeType,
-                relays: [...new Set([...relaysByAuthor[stallEvent.pubkey].write, B_RELAY])],
-                maxSizeBytes: MAX_ICON_SIZE_BYTES
-              })
+              const serviceTag = getTagValue(listingEvent.tags, 'service')
+              const service = serviceTag?.[0] || 'blossom'
+
+              let iconUrl
+              if (service === 'blossom') {
+                const servers = blossomServersByAuthor[listingEvent.pubkey] || []
+                if (servers.length > 0) {
+                  iconUrl = `${servers[0].replace(/\/$/, '')}/${iconRootHash}`
+                }
+              } else {
+                iconUrl = await fetchFileDataUrl({
+                  pubkey: listingEvent.pubkey,
+                  rootHash: iconRootHash,
+                  mimeType: iconMimeType,
+                  relays: [...new Set([...relaysByAuthor[listingEvent.pubkey].write, B_RELAY])],
+                  maxSizeBytes: MAX_ICON_SIZE_BYTES
+                })
+              }
 
               if (iconUrl) {
                 try {

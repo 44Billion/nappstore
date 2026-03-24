@@ -13,7 +13,7 @@ import { useToast } from '#shared/toast.js'
 import { appEncode, appDecode } from '#helpers/nostr/nip19.js'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import nostrRelays from '#services/nostr-relays.js'
-import { getRelays } from '#helpers/nostr/queries.js'
+import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
@@ -117,9 +117,15 @@ f('nappsUpload', function () {
             if (event.type === 'init') {
               store.uploadProgress$({ progress: 0, status: '', totalFiles: event.totalFiles, filesProgress: 0 })
             }
-            if (event.type === 'file-uploaded') {
+            if (event.type === 'file-uploaded' || event.type === 'media-uploaded') {
               const prev = store.uploadProgress$()
               store.uploadProgress$({ ...prev, filesProgress: (prev.filesProgress || 0) + 1 })
+            }
+            if (event.type === 'listing-published') {
+              store.uploadProgress$({ ...store.uploadProgress$(), status: 'App listing published' })
+            }
+            if (event.type === 'manifest-published') {
+              store.uploadProgress$({ ...store.uploadProgress$(), status: 'Site manifest published' })
             }
             if (event.type === 'complete') {
               encodedApp = event.napp
@@ -179,7 +185,7 @@ f('nappsUpload', function () {
         const encodedApp = appEncode({
           dTag: app.dTag,
           pubkey: app.pubkey,
-          kind: 37448
+          kind: 35128
         })
         const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
         await navigator.clipboard.writeText(url)
@@ -201,11 +207,15 @@ f('nappsUpload', function () {
       const PRIMAL_RELAY = 'wss://relay.primal.net'
       writeRelays = [...new Set([...writeRelays, PRIMAL_RELAY])]
 
-      // Fetch all app bundle events (kind 37448) authored by this user
-      const { result: events } = await nostrRelays.getEvents(
-        { kinds: [37448], authors: [pubkey], limit: 400 },
-        writeRelays
-      )
+      // Fetch all site manifest events (kind 35128) authored by this user
+      const [{ result: events }, blossomServersByAuthor] = await Promise.all([
+        nostrRelays.getEvents(
+          { kinds: [35128], authors: [pubkey], limit: 400 },
+          writeRelays
+        ),
+        getBlossomServersByPubkey([pubkey])
+      ])
+      const blossomServers = blossomServersByAuthor[pubkey] || []
 
       if (events.length === 0) {
         store.myApps$([])
@@ -224,18 +234,17 @@ f('nappsUpload', function () {
         return acc
       }, {})
 
-      // Fetch metadata for each app by reconstructing files from chunks
+      // Fetch metadata for each app
       const apps = await Promise.all(
-        Object.values(appsByDTag).map(async (bundleEvent) => {
+        Object.values(appsByDTag).map(async (manifestEvent) => {
           try {
-            const dTag = bundleEvent.tags.find(t => t[0] === 'd')[1]
+            const dTag = manifestEvent.tags.find(t => t[0] === 'd')[1]
 
-            // Fetch metadata from reconstructed files
-            const metadata = await fetchAppMetadata(bundleEvent, writeRelays)
+            const metadata = await fetchAppMetadata(manifestEvent, writeRelays, { blossomServers })
             const encodedApp = appEncode({
               dTag,
-              pubkey: bundleEvent.pubkey,
-              kind: 37448
+              pubkey: manifestEvent.pubkey,
+              kind: 35128
             })
 
             // Store icon in sessionStorage for app-icon component
@@ -253,14 +262,14 @@ f('nappsUpload', function () {
             return {
               id: encodedApp,
               dTag,
-              pubkey: bundleEvent.pubkey,
+              pubkey: manifestEvent.pubkey,
               name: metadata.name || dTag,
               description: metadata.description || 'No description',
               icon: metadata.icon || '',
-              uploadedAt: bundleEvent.created_at * 1000
+              uploadedAt: manifestEvent.created_at * 1000
             }
           } catch (err) {
-            console.error('Failed to fetch app metadata for bundle event:', err)
+            console.error('Failed to fetch app metadata for manifest event:', err)
             return null
           }
         }).filter(Boolean)
@@ -543,7 +552,7 @@ f('nappsUpload', function () {
                     const encodedApp = appEncode({
                       dTag: app.dTag,
                       pubkey: app.pubkey,
-                      kind: 37448
+                      kind: 35128
                     })
                     const appUrl = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
 

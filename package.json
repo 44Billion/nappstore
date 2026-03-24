@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@scure/base": "^2.0.0",
-    "nappup": "^1.8.1",
+    "nappup": "^1.8.4",
     "nmmr": "^1.0.9",
     "nostr-tools": "^2.16.2",
     "thenameisf": "^1.0.3",

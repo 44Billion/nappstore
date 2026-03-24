@@ -10,15 +10,15 @@
   "self": [
     // ["<hex pubkey>"]
   ],
-  "stallIcon": [
+  "icon": [
     // ["<base64 data url>" /* e.g. "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..." */]
   ],
-  "stallName": [
+  "name": [
     ["App Store"]
     // first entry is the default for missing languages
     // ["Fantastic SideScroller", "en" /* optional; ISO 639-1 language code */]
   ],
-  "stallSummary": [
+  "summary": [
     ["All apps in one place"]
     // ["A brief description", "en" /* optional; ISO 639-1 language code */]
   ],

@@ -2,7 +2,7 @@ import { f, useClosestStore, useStore, useTask } from '#f'
 import '#f/components/f-to-signals.js'
 import { npubDecode, appEncode } from '#helpers/nostr/nip19.js'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
-import { getRelays } from '#helpers/nostr/queries.js'
+import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import { cssVars } from '#assets/styles/theme.js'
@@ -96,7 +96,7 @@ f('profilesShow', function () {
       const encodedApp = appEncode({
         dTag: app.dTag,
         pubkey: app.pubkey,
-        kind: 37448
+        kind: 35128
       })
       const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
       window.open(url, '_blank')
@@ -140,15 +140,19 @@ f('profilesShow', function () {
     }
   })
 
-  // Fetch user's apps (kind 37448)
+  // Fetch user's apps (site manifest kind 35128)
   useTask(async () => {
     store.isLoadingApps$(true)
     try {
       const { write: writeRelays } = await getRelays(pubkey)
-      const { result: events } = await nostrRelays.getEvents(
-        { kinds: [37448], authors: [pubkey] },
-        writeRelays
-      )
+      const [{ result: events }, blossomServersByAuthor] = await Promise.all([
+        nostrRelays.getEvents(
+          { kinds: [35128], authors: [pubkey] },
+          writeRelays
+        ),
+        getBlossomServersByPubkey([pubkey])
+      ])
+      const blossomServers = blossomServersByAuthor[pubkey] || []
 
       if (events.length === 0) {
         store.apps$([])
@@ -169,16 +173,16 @@ f('profilesShow', function () {
 
       // Fetch metadata for each app
       const apps = await Promise.all(
-        Object.values(appsByDTag).map(async (bundleEvent) => {
-          const dTag = bundleEvent.tags.find(t => t[0] === 'd')[1]
-          const metadata = await fetchAppMetadata(bundleEvent, writeRelays)
+        Object.values(appsByDTag).map(async (manifestEvent) => {
+          const dTag = manifestEvent.tags.find(t => t[0] === 'd')[1]
+          const metadata = await fetchAppMetadata(manifestEvent, writeRelays, { blossomServers })
 
           // Store icon in sessionStorage for app-icon component
           if (metadata.icon) {
             try {
               setSessionStorageItem(
                 `appById_${dTag}_icon`,
-                { url: metadata.icon }
+                { url: metadata.icon.url || metadata.icon }
               )
             } catch (err) {
               console.error('Failed to cache icon:', err)
@@ -191,7 +195,7 @@ f('profilesShow', function () {
             name: metadata.name || dTag,
             description: metadata.description || 'No description',
             icon: metadata.icon,
-            uploadedAt: bundleEvent.created_at * 1000
+            uploadedAt: manifestEvent.created_at * 1000
           }
         })
       )

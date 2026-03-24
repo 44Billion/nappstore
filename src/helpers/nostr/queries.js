@@ -4,10 +4,47 @@ import { getSvgAvatar } from '#helpers/avatar.js'
 import { getRandomId } from '#helpers/misc.js'
 import { maybeUnref } from '#helpers/timer.js'
 
+const DEFAULT_RELAYS_PER_PUBKEY = 2
+
+// Given pubkeys and their relay mappings, picks the minimum set of relays
+// that covers all pubkeys (up to maxPerPubkey relays each), preferring
+// relays shared by more pubkeys.
+// Returns Map<relayUrl, pubkey[]>.
+function pickRelaysForPubkeys (pubkeys, relaysByPubkey, { maxPerPubkey = DEFAULT_RELAYS_PER_PUBKEY } = {}) {
+  const pkToPossibleRelays = new Map()
+  for (const pk of pubkeys) {
+    const wr = relaysByPubkey[pk]?.write || []
+    pkToPossibleRelays.set(pk, new Set(wr.length > 0 ? wr : freeRelays.slice(0, DEFAULT_RELAYS_PER_PUBKEY)))
+  }
+
+  const relayCounts = new Map()
+  for (const relays of pkToPossibleRelays.values()) {
+    for (const r of relays) {
+      relayCounts.set(r, (relayCounts.get(r) || 0) + 1)
+    }
+  }
+  const rankedRelays = [...relayCounts.keys()].sort((a, b) => relayCounts.get(b) - relayCounts.get(a))
+
+  const relayToAuthors = new Map()
+  for (const pk of pubkeys) {
+    const possibleRelays = pkToPossibleRelays.get(pk)
+    let assigned = 0
+    for (const r of rankedRelays) {
+      if (assigned >= maxPerPubkey) break
+      if (!possibleRelays.has(r)) continue
+      if (!relayToAuthors.has(r)) relayToAuthors.set(r, [])
+      relayToAuthors.get(r).push(pk)
+      assigned++
+    }
+  }
+
+  return relayToAuthors
+}
+
 const profilesByPubkey = {}
 /**
  * Fetches profiles for multiple pubkeys efficiently.
- * Use the minimum set of relays that cover all pubkeys, limiting each pubkey to 2 relays at most.
+ * Uses the minimum set of write relays that cover all pubkeys.
  */
 export async function getProfiles (pubkeys,
   { _nostrRelays = nostrRelays, _getRelaysByPubkey = getRelaysByPubkey, _getSvgAvatar = getSvgAvatar } = {}
@@ -15,35 +52,7 @@ export async function getProfiles (pubkeys,
   const missingPubkeys = [...new Set(pubkeys)].filter(pk => !profilesByPubkey[pk])
   if (missingPubkeys.length > 0) {
     const relaysByAuthor = await _getRelaysByPubkey(missingPubkeys)
-
-    const pkToPossibleRelays = new Map()
-    for (const pk of missingPubkeys) {
-      const wr = relaysByAuthor[pk].write
-      pkToPossibleRelays.set(pk, new Set(wr.length > 0 ? wr : freeRelays.slice(0, 2)))
-    }
-
-    // Rank relays by how many pubkeys use them (most popular first)
-    const relayCounts = new Map()
-    for (const relays of pkToPossibleRelays.values()) {
-      for (const r of relays) {
-        relayCounts.set(r, (relayCounts.get(r) || 0) + 1)
-      }
-    }
-    const rankedRelays = [...relayCounts.keys()].sort((a, b) => relayCounts.get(b) - relayCounts.get(a))
-
-    // Assign up to 2 relays per pubkey, picking the most popular ones first
-    const relayToAuthors = new Map()
-    for (const pk of missingPubkeys) {
-      const possibleRelays = pkToPossibleRelays.get(pk)
-      let assigned = 0
-      for (const r of rankedRelays) {
-        if (assigned >= 2) break
-        if (!possibleRelays.has(r)) continue
-        if (!relayToAuthors.has(r)) relayToAuthors.set(r, [])
-        relayToAuthors.get(r).push(pk)
-        assigned++
-      }
-    }
+    const relayToAuthors = pickRelaysForPubkeys(missingPubkeys, relaysByAuthor)
 
     const results = await Promise.all(
       [...relayToAuthors.entries()]
@@ -179,6 +188,48 @@ export async function getRelays (pubkey, { _nostrRelays = nostrRelays } = {}) {
   const relaysByPubkeyResult = await getRelaysByPubkey([pubkey], { _nostrRelays })
   return relaysByPubkeyResult[pubkey]
 }
+const blossomServersByPubkey = {}
+// Returns a mapping of pubkeys to their blossom server URLs (kind 10063).
+export async function getBlossomServersByPubkey (pubkeys, { _nostrRelays = nostrRelays, _getRelaysByPubkey = getRelaysByPubkey } = {}) {
+  const missingPubkeys = pubkeys.filter(pk => !blossomServersByPubkey[pk])
+  if (missingPubkeys.length > 0) {
+    const relaysByAuthor = await _getRelaysByPubkey(missingPubkeys)
+    const relayToAuthors = pickRelaysForPubkeys(missingPubkeys, relaysByAuthor)
+
+    const results = await Promise.all(
+      [...relayToAuthors.entries()]
+        .map(([relay, authors]) =>
+          _nostrRelays.getEvents({ kinds: [10063], authors }, [relay])
+        )
+    )
+    const allEvents = results.flatMap(r => r.result)
+
+    const latestByPubkey = {}
+    for (const event of allEvents) {
+      if (!latestByPubkey[event.pubkey] || event.created_at > latestByPubkey[event.pubkey].created_at) {
+        latestByPubkey[event.pubkey] = event
+      }
+    }
+
+    for (const pubkey of missingPubkeys) {
+      const event = latestByPubkey[pubkey]
+      if (event) {
+        blossomServersByPubkey[pubkey] = event.tags
+          .filter(t => t[0] === 'server' && t[1])
+          .map(t => t[1])
+        maybeUnref(setTimeout(
+          () => { delete blossomServersByPubkey[pubkey] },
+          3 * 60 * 1000
+        ))
+      }
+    }
+  }
+  return pubkeys.reduce((acc, pubkey) => {
+    acc[pubkey] = blossomServersByPubkey[pubkey] || []
+    return acc
+  }, {})
+}
+
 export function eventToRelays (event) {
   if (typeof event !== 'object' || event === null || event.kind !== 10002 || typeof event.pubkey !== 'string') {
     throw new Error('invalid event')

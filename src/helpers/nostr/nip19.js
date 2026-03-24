@@ -1,6 +1,5 @@
 import { bytesToBase16, base16ToBytes } from '#helpers/base16.js'
 import { bytesToBase62, base62ToBytes, BASE62_ALPHABET } from '#helpers/base62.js'
-import { isNostrAppDTagSafe } from '#helpers/app.js'
 import { bech32 } from '@scure/base'
 
 const MAX_SIZE = 5000
@@ -9,9 +8,9 @@ const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
 const kindByChannel = {
-  main: 37448,
-  next: 37449,
-  draft: 37450
+  main: 35128,
+  next: 35129,
+  draft: 35130
 }
 const channelByKind = Object.fromEntries(
   Object.entries(kindByChannel).map(([k, v]) => [v, k])
@@ -25,7 +24,6 @@ const channelByPrefix = Object.fromEntries(
   Object.entries(prefixByChannel).map(([k, v]) => [v, k])
 )
 export function appEncode (ref) {
-  if (!isNostrAppDTagSafe(ref.dTag)) { throw new Error('Invalid deduplication tag') }
   const channel = ref.channel ? (prefixByChannel[ref.channel] && ref.channel) : channelByKind[ref.kind]
   if (!channel) throw new Error('Wrong channel')
   const tlv = toTlv([
@@ -48,7 +46,6 @@ export function appDecode (entity) {
   if (!tlv[2]?.[0]) throw new Error('Missing author pubkey')
   if (tlv[2][0].length !== 32) throw new Error('Author pubkey should be 32 bytes')
   const dTag = textDecoder.decode(tlv[0][0])
-  if (!isNostrAppDTagSafe(dTag)) { throw new Error('Invalid deduplication tag') }
 
   return {
     dTag,
