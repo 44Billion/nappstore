@@ -78,12 +78,11 @@ f('nappsIndex', function () {
           const existingKeys = new Set(
             this.apps$().map(app => `${app.pubkey}:${app.dTag}`)
           )
-          const pendingListingEvents = []
+          const candidateEntries = []
           let rawEventCount = 0
-          let newAppCount = 0
           let oldestCreatedAt = this.oldestTimestamp$()
 
-          // Stream events from the relay, adding apps to the UI as they arrive
+          // Collect listing events from the relay
           const generator = nostrRelays.getEventsGenerator(
             filter,
             [B_RELAY],
@@ -108,12 +107,14 @@ f('nappsIndex', function () {
 
             const app = this.createAppFromListingEvent(event)
             if (!app) continue
-            newAppCount++
-            pendingListingEvents.push(event)
 
-            // Append to store immediately so the UI refreshes per event
-            this.apps$([...this.apps$(), app])
+            candidateEntries.push({ app, event })
           }
+
+          // Stream-verify site manifests — apps appear as soon as confirmed
+          const verifiedEntries = await this.filterByManifest(candidateEntries)
+          const pendingListingEvents = verifiedEntries.map(e => e.event)
+          const newAppCount = verifiedEntries.length
 
           // Update pagination cursor
           if (rawEventCount > 0) {
@@ -181,6 +182,50 @@ f('nappsIndex', function () {
         description: trimOrEmpty(summaryTag?.[0]) || 'No description',
         iconFx: iconTag?.[0] || null,
         uploadedAt: listingEvent.created_at * 1000
+      }
+    },
+
+    // Stream-verifies candidate apps against site manifest events,
+    // adding each confirmed app to the UI as soon as its manifest arrives
+    async filterByManifest (entries) {
+      if (entries.length === 0) return entries
+
+      const candidateMap = new Map(
+        entries.map(e => [`${e.app.pubkey}:${e.app.kind}:${e.app.dTag}`, e])
+      )
+
+      try {
+        const authors = [...new Set(entries.map(e => e.app.pubkey))]
+        const dTags = [...new Set(entries.map(e => e.app.dTag))]
+        const manifestKinds = [...new Set(entries.map(e => e.app.kind))]
+
+        const verified = []
+        const generator = nostrRelays.getEventsGenerator(
+          { kinds: manifestKinds, authors, '#d': dTags },
+          [B_RELAY],
+          { timeout: 10000 }
+        )
+
+        for await (const item of generator) {
+          if (item.type !== 'event') continue
+          const e = item.event
+          const dTag = e.tags.find(t => t[0] === 'd')?.[1]
+          const key = `${e.pubkey}:${e.kind}:${dTag}`
+          const entry = candidateMap.get(key)
+          if (!entry) continue
+          candidateMap.delete(key)
+          verified.push(entry)
+          this.apps$([...this.apps$(), entry.app])
+        }
+
+        return verified
+      } catch (err) {
+        console.error('Failed to verify manifests:', err)
+        const remaining = [...candidateMap.values()]
+        if (remaining.length > 0) {
+          this.apps$([...this.apps$(), ...remaining.map(e => e.app)])
+        }
+        return entries
       }
     },
 
