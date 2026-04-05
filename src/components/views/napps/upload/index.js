@@ -12,7 +12,7 @@ import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
 import { appEncode, appDecode } from '#helpers/nostr/nip19.js'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
-import nostrRelays from '#services/nostr-relays.js'
+import nostrRelays, { nappRelays } from '#services/nostr-relays.js'
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import lru from '#services/lru.js'
@@ -177,6 +177,67 @@ f('nappsUpload', function () {
         store.currentUploadingApp$(null)
       } finally {
         store.isUploading$(false)
+      }
+    },
+
+    async handleDeleteApp (app) {
+      try {
+        const writeRelays = (await getRelays(app.pubkey)).write
+        const allRelays = [...new Set([...writeRelays, ...nappRelays])]
+
+        const manifestKind = 35128
+        const listingKind = 37348
+
+        const { result: events } = await nostrRelays.getEvents(
+          { kinds: [manifestKind, listingKind], authors: [app.pubkey], '#d': [app.dTag] },
+          allRelays
+        )
+
+        const toDelete = [
+          events.find(e => e.kind === manifestKind),
+          events.find(e => e.kind === listingKind)
+        ].filter(Boolean)
+
+        if (toDelete.length === 0) {
+          showToast(`Could not find events to delete for "${app.name}"`, 'error', 4000)
+          return
+        }
+
+        const results = await Promise.all(toDelete.map(async (event) => {
+          const deletionEvent = {
+            kind: 5,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [['e', event.id]],
+            content: ''
+          }
+          const signedEvent = await window.nostr.signEvent(deletionEvent)
+          return nostrRelays.sendEvent(signedEvent, allRelays)
+        }))
+
+        const totalAttempts = toDelete.length * allRelays.length
+        const totalErrors = results.reduce((sum, r) => sum + r.errors.length, 0)
+        const successCount = totalAttempts - totalErrors
+
+        if (successCount === 0) {
+          showToast(`Failed to delete app "${app.name}"`, 'error', 5000)
+          return
+        }
+
+        if (successCount === totalAttempts) {
+          showToast(`App "${app.name}" deleted successfully`, 'success', 3000)
+        } else {
+          showToast(
+            `App "${app.name}" partially deleted (${successCount}/${totalAttempts} relay acks)`,
+            'info',
+            5000
+          )
+        }
+
+        const myApps = store.myApps$()
+        store.myApps$(myApps.filter(a => a.dTag !== app.dTag || a.pubkey !== app.pubkey))
+      } catch (err) {
+        console.error('Failed to delete app:', err)
+        showToast(`Failed to delete app "${app.name}"`, 'error', 5000)
       }
     },
 
@@ -597,28 +658,53 @@ f('nappsUpload', function () {
                             justifyContent: 'space-between',
                             minWidth: 0
                           }}>
-                            <div>
-                              <div style=${{
-                                fontSize: '14px',
-                                fontWeight: 'bold',
-                                color: cssVars.colors.fg2,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}>
-                                ${app.name}
+                            <div style=${{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: '8px'
+                            }}>
+                              <div style=${{ flex: 1, minWidth: 0 }}>
+                                <div style=${{
+                                  fontSize: '14px',
+                                  fontWeight: 'bold',
+                                  color: cssVars.colors.fg2,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  ${app.name}
+                                </div>
+                                <div style=${{
+                                  fontSize: '12px',
+                                  color: cssVars.colors.fg2,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: '2',
+                                  WebkitBoxOrient: 'vertical'
+                                }}>
+                                  ${app.description}
+                                </div>
                               </div>
-                              <div style=${{
-                                fontSize: '12px',
-                                color: cssVars.colors.fg2,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                display: '-webkit-box',
-                                WebkitLineClamp: '2',
-                                WebkitBoxOrient: 'vertical'
-                              }}>
-                                ${app.description}
-                              </div>
+                              <button
+                                onclick=${() => store.handleDeleteApp(app)}
+                                title="Delete app"
+                                style=${{
+                                  background: 'none',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  fontSize: '16px',
+                                  padding: '2px 4px',
+                                  flexShrink: 0,
+                                  lineHeight: 1,
+                                  color: cssVars.colors.fg2,
+                                  transition: 'opacity 0.2s'
+                                }}
+                                onmouseover=${function () { this.style.opacity = '0.7' }}
+                                onmouseout=${function () { this.style.opacity = '1' }}
+                              >
+                                🗑
+                              </button>
                             </div>
 
                             ${isCurrentlyUploading
