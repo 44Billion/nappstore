@@ -10,7 +10,7 @@ const DEFAULT_RELAYS_PER_PUBKEY = 2
 // that covers all pubkeys (up to maxPerPubkey relays each), preferring
 // relays shared by more pubkeys.
 // Returns Map<relayUrl, pubkey[]>.
-function pickRelaysForPubkeys (pubkeys, relaysByPubkey, { maxPerPubkey = DEFAULT_RELAYS_PER_PUBKEY } = {}) {
+export function pickRelaysForPubkeys (pubkeys, relaysByPubkey, { maxPerPubkey = DEFAULT_RELAYS_PER_PUBKEY } = {}) {
   const pkToPossibleRelays = new Map()
   for (const pk of pubkeys) {
     const wr = relaysByPubkey[pk]?.write || []

@@ -1,7 +1,7 @@
 import { f, useStore, useTask, useSignal } from '#f'
 import '#f/components/f-to-signals.js'
 import { appEncode } from '#helpers/nostr/nip19.js'
-import { getRelaysByPubkey, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
+import { getRelaysByPubkey, pickRelaysForPubkeys, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
 import { fetchFileDataUrl } from '#services/app-metadata-fetcher.js'
 import { cssVars } from '#assets/styles/theme.js'
@@ -185,7 +185,7 @@ f('nappsIndex', function () {
       }
     },
 
-    // Stream-verifies candidate apps against site manifest events,
+    // Stream-verifies candidate apps against site manifest events on authors' write relays,
     // adding each confirmed app to the UI as soon as its manifest arrives
     async filterByManifest (entries) {
       if (entries.length === 0) return entries
@@ -199,24 +199,31 @@ f('nappsIndex', function () {
         const dTags = [...new Set(entries.map(e => e.app.dTag))]
         const manifestKinds = [...new Set(entries.map(e => e.app.kind))]
 
+        const relaysByAuthor = await getRelaysByPubkey(authors)
+        const relayToAuthors = pickRelaysForPubkeys(authors, relaysByAuthor)
+
         const verified = []
-        const generator = nostrRelays.getEventsGenerator(
-          { kinds: manifestKinds, authors, '#d': dTags },
-          [B_RELAY],
-          { timeout: 10000 }
+        const generators = [...relayToAuthors.entries()].map(([relay, relayAuthors]) =>
+          nostrRelays.getEventsGenerator(
+            { kinds: manifestKinds, authors: relayAuthors, '#d': dTags, limit: entries.length, search: 'include:spam' },
+            [relay],
+            { timeout: 10000 }
+          )
         )
 
-        for await (const item of generator) {
-          if (item.type !== 'event') continue
-          const e = item.event
-          const dTag = e.tags.find(t => t[0] === 'd')?.[1]
-          const key = `${e.pubkey}:${e.kind}:${dTag}`
-          const entry = candidateMap.get(key)
-          if (!entry) continue
-          candidateMap.delete(key)
-          verified.push(entry)
-          this.apps$([...this.apps$(), entry.app])
-        }
+        await Promise.all(generators.map(async (generator) => {
+          for await (const item of generator) {
+            if (item.type !== 'event') continue
+            const e = item.event
+            const dTag = e.tags.find(t => t[0] === 'd')?.[1]
+            const key = `${e.pubkey}:${e.kind}:${dTag}`
+            const entry = candidateMap.get(key)
+            if (!entry) continue
+            candidateMap.delete(key)
+            verified.push(entry)
+            this.apps$([...this.apps$(), entry.app])
+          }
+        }))
 
         return verified
       } catch (err) {
