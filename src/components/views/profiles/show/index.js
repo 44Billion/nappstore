@@ -419,11 +419,10 @@ f('profilesShow', function () {
         `
       : apps.map((app, index) => this.h({ key: app.dTag })`
           <f-to-signals
-            key=${app.dTag}
             props=${{
               from: ['app'],
               app: { id: app.dTag, index: index + 1 },
-              render: props => this.h`
+              render: ({ h, props }) => h`
                 <div
                   onclick=${() => store.handleOpenApp(app)}
                   style=${{

@@ -416,11 +416,10 @@ f('nappsIndex', function () {
 
       return this.h({ key })`
           <f-to-signals
-            key=${key}
             props=${{
               from: ['app'],
               app: { id: app.id, index: index + 1, fx: app.iconFx },
-              render: props => this.h`
+              render: ({ h, props }) => h`
                 <div
                   onclick=${() => store.handleOpenApp(app)}
                   style=${{
@@ -446,7 +445,7 @@ f('nappsIndex', function () {
                 >
                   ${
                     isPendingOpen
-                      ? this.h`
+                      ? h`
                         <div style=${{
                           position: 'absolute',
                           inset: '0',

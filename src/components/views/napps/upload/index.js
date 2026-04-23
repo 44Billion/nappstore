@@ -619,11 +619,10 @@ f('nappsUpload', function () {
 
                     return this.h({ key: app.dTag })`
                       <f-to-signals
-                        key=${app.dTag}
                         props=${{
                           from: ['app'],
                           app: { id: encodedApp, index },
-                          render: props => this.h`
+                          render: ({ h, props }) => h`
                             <div style=${{
                               display: 'flex',
                               flexDirection: 'column',
@@ -708,7 +707,7 @@ f('nappsUpload', function () {
                             </div>
 
                             ${isCurrentlyUploading
-                              ? this.h`
+                              ? h`
                                 <div style=${{
                                   fontSize: '11px',
                                   color: cssVars.colors.fg2,
@@ -720,7 +719,7 @@ f('nappsUpload', function () {
                               `
                               : (!appUrl
                                 ? ''
-                                : this.h`
+                                : h`
                                   <div style=${{
                                     display: 'flex',
                                     gap: '8px',

@@ -42,7 +42,7 @@
     "nappup": "^1.8.4",
     "nmmr": "^1.0.9",
     "nostr-tools": "^2.16.2",
-    "thenameisf": "^1.0.3",
+    "thenameisf": "^1.1.1",
     "url-router": "^13.0.0"
   }
 }

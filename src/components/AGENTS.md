@@ -118,8 +118,7 @@ f(function aExample () {
       type='button'
     >Click me</button>
     ${storeA.names.map(name =>
-      // We have to pass the key both to the h function and to the wrapper component
-      // to account for 'thenameisf' different versions
+      // We have to pass the key to the h function
       //
       // The <f-to-signals> component is optional, but it is needed if we
       // want to inline-transform non-reactive props into computed props
@@ -140,12 +139,11 @@ f(function aExample () {
       // expected to be reactive.
       this.h({ key: name })`
         <f-to-signals
-          key=${name}
           props=${{
             from: ['name', ['selectedName', 'setSelectedName']],
             name, // this becomes name$
             notTransformedToSignalNorToComputed: 'example', // this will be passed down as-is
-            render: props => this.h`<child-item props=${props} ></child-item>`
+            render: ({ h, props }) => h`<child-item props=${props} ></child-item>`
           }}
         />
       `

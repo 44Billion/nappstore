@@ -158,7 +158,7 @@ jobs:
 
           echo "Publishing $DIST_PATH..."
           # Using -y to accept npx and nappup prompts automatically
-          if ! npx -y nappup "$DIST_PATH" -y -s "$NOSTR_SECRET_KEY" -D "$PROJECT_NAME"; then
+          if ! npx -y nappup "$DIST_PATH" -y -s "$NOSTR_SECRET_KEY" -d "$PROJECT_NAME"; then
             echo "::error::Publish failed"
             echo "PUBLISH_FAILED=true" >> $GITHUB_ENV
             exit 1
