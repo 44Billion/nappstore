@@ -121,11 +121,8 @@ f('nappsUpload', function () {
               const prev = store.uploadProgress$()
               store.uploadProgress$({ ...prev, filesProgress: (prev.filesProgress || 0) + 1 })
             }
-            if (event.type === 'listing-published') {
-              store.uploadProgress$({ ...store.uploadProgress$(), status: 'App listing published' })
-            }
             if (event.type === 'manifest-published') {
-              store.uploadProgress$({ ...store.uploadProgress$(), status: 'Site manifest published' })
+              store.uploadProgress$({ ...store.uploadProgress$(), status: 'Site manifest and app metadata published' })
             }
             if (event.type === 'complete') {
               encodedApp = event.napp
@@ -133,7 +130,7 @@ f('nappsUpload', function () {
           }
         })
 
-        const { dTag, pubkey } = appDecode(encodedApp)
+        const { dTag, pubkey, kind } = appDecode(encodedApp)
 
         // Store icon in sessionStorage for app-icon component
         if (faviconUrl && encodedApp) {
@@ -150,6 +147,7 @@ f('nappsUpload', function () {
           id: encodedApp,
           dTag,
           pubkey,
+          kind,
           name: name || dTag,
           description: description || 'No description',
           icon: faviconUrl,
@@ -185,18 +183,17 @@ f('nappsUpload', function () {
         const writeRelays = (await getRelays(app.pubkey)).write
         const allRelays = [...new Set([...writeRelays, ...nappRelays])]
 
-        const manifestKind = 35128
-        const listingKind = 37348
+        const manifestKind = app.kind || 35128
 
         const { result: events } = await nostrRelays.getEvents(
-          { kinds: [manifestKind, listingKind], authors: [app.pubkey], '#d': [app.dTag] },
+          { kinds: [manifestKind], authors: [app.pubkey], '#d': [app.dTag] },
           allRelays
         )
 
-        const toDelete = [
-          events.find(e => e.kind === manifestKind),
-          events.find(e => e.kind === listingKind)
-        ].filter(Boolean)
+        const currentManifest = events
+          .filter(event => event.kind === manifestKind)
+          .sort((a, b) => b.created_at - a.created_at || String(a.id).localeCompare(String(b.id)))[0]
+        const toDelete = [currentManifest].filter(Boolean)
 
         if (toDelete.length === 0) {
           showToast(`Could not find events to delete for "${app.name}"`, 'error', 4000)
@@ -207,7 +204,10 @@ f('nappsUpload', function () {
           const deletionEvent = {
             kind: 5,
             created_at: Math.floor(Date.now() / 1000),
-            tags: [['e', event.id]],
+            tags: [
+              ['e', event.id],
+              ['a', `${manifestKind}:${app.pubkey}:${app.dTag}`]
+            ],
             content: ''
           }
           const signedEvent = await window.nostr.signEvent(deletionEvent)
@@ -234,7 +234,9 @@ f('nappsUpload', function () {
         }
 
         const myApps = store.myApps$()
-        store.myApps$(myApps.filter(a => a.dTag !== app.dTag || a.pubkey !== app.pubkey))
+        store.myApps$(myApps.filter(a =>
+          a.dTag !== app.dTag || a.pubkey !== app.pubkey || (a.kind || 35128) !== manifestKind
+        ))
       } catch (err) {
         console.error('Failed to delete app:', err)
         showToast(`Failed to delete app "${app.name}"`, 'error', 5000)
@@ -246,7 +248,7 @@ f('nappsUpload', function () {
         const encodedApp = appEncode({
           dTag: app.dTag,
           pubkey: app.pubkey,
-          kind: 35128
+          kind: app.kind || 35128
         })
         const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
         await navigator.clipboard.writeText(url)
@@ -268,10 +270,10 @@ f('nappsUpload', function () {
       const PRIMAL_RELAY = 'wss://relay.primal.net'
       writeRelays = [...new Set([...writeRelays, PRIMAL_RELAY])]
 
-      // Fetch all site manifest events (kind 35128) authored by this user
+      // Fetch all unified site manifest channels authored by this user.
       const [{ result: events }, blossomServersByAuthor] = await Promise.all([
         nostrRelays.getEvents(
-          { kinds: [35128], authors: [pubkey], limit: 400 },
+          { kinds: [35128, 35129, 35130], authors: [pubkey], limit: 400 },
           writeRelays
         ),
         getBlossomServersByPubkey([pubkey])
@@ -284,13 +286,14 @@ f('nappsUpload', function () {
         return
       }
 
-      // Group events by d tag and keep only the most recent version
+      // Group by channel and d tag, keeping only the newest replacement.
       const appsByDTag = events.reduce((acc, event) => {
         const dTag = event.tags.find(t => t[0] === 'd')?.[1]
         if (!dTag) return acc
 
-        if (!acc[dTag] || event.created_at > acc[dTag].created_at) {
-          acc[dTag] = event
+        const key = `${event.kind}:${dTag}`
+        if (!acc[key] || event.created_at > acc[key].created_at) {
+          acc[key] = event
         }
         return acc
       }, {})
@@ -305,7 +308,7 @@ f('nappsUpload', function () {
             const encodedApp = appEncode({
               dTag,
               pubkey: manifestEvent.pubkey,
-              kind: 35128
+              kind: manifestEvent.kind
             })
 
             // Store icon in sessionStorage for app-icon component
@@ -324,6 +327,7 @@ f('nappsUpload', function () {
               id: encodedApp,
               dTag,
               pubkey: manifestEvent.pubkey,
+              kind: manifestEvent.kind,
               name: metadata.name || dTag,
               description: metadata.description || 'No description',
               icon: metadata.icon || '',
@@ -613,11 +617,11 @@ f('nappsUpload', function () {
                     const encodedApp = appEncode({
                       dTag: app.dTag,
                       pubkey: app.pubkey,
-                      kind: 35128
+                      kind: app.kind || 35128
                     })
                     const appUrl = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
 
-                    return this.h({ key: app.dTag })`
+                    return this.h({ key: app.id })`
                       <f-to-signals
                         props=${{
                           from: ['app'],

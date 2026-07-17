@@ -1,9 +1,10 @@
 import { f, useStore, useTask, useSignal } from '#f'
 import '#f/components/f-to-signals.js'
 import { appEncode } from '#helpers/nostr/nip19.js'
-import { getRelaysByPubkey, pickRelaysForPubkeys, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
+import { getRelaysByPubkey, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
 import { fetchFileDataUrl } from '#services/app-metadata-fetcher.js'
+import { findMarkedManifestAsset, getManifestMetadata } from '#helpers/manifest.js'
 import { cssVars } from '#assets/styles/theme.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
@@ -18,10 +19,6 @@ function getTagValue (tags, key) {
   if (!Array.isArray(tags)) return null
   const tag = tags.find(entry => Array.isArray(entry) && entry[0] === key)
   return tag ? tag.slice(1) : null
-}
-
-function trimOrEmpty (value) {
-  return typeof value === 'string' ? value.trim() : ''
 }
 
 // Lazy lists all apps
@@ -53,7 +50,7 @@ f('nappsIndex', function () {
       this.pendingOpenTimeoutId$(timeoutId)
     },
 
-    // Streams app listing events from the relay and updates the UI as each arrives
+    // Streams unified manifest events from the relay and updates the UI as each arrives.
     async loadMoreApps () {
       if (this.isLoading$() || !this.hasMore$()) return
 
@@ -66,7 +63,7 @@ f('nappsIndex', function () {
           retryWithSpam = false
 
           const filter = {
-            kinds: [37348],
+            kinds: [35128, 35129, 35130],
             until: this.oldestTimestamp$(),
             limit: APPS_PER_PAGE
           }
@@ -76,13 +73,13 @@ f('nappsIndex', function () {
           }
 
           const existingKeys = new Set(
-            this.apps$().map(app => `${app.pubkey}:${app.dTag}`)
+            this.apps$().map(app => `${app.pubkey}:${app.kind}:${app.dTag}`)
           )
           const candidateEntries = []
           let rawEventCount = 0
           let oldestCreatedAt = this.oldestTimestamp$()
 
-          // Collect listing events from the relay
+          // A manifest already carries files, media, and listing metadata.
           const generator = nostrRelays.getEventsGenerator(
             filter,
             [B_RELAY],
@@ -101,20 +98,19 @@ f('nappsIndex', function () {
             const dTagValue = getTagValue(event.tags, 'd')?.[0]
             if (!dTagValue) continue
 
-            const key = `${event.pubkey}:${dTagValue}`
+            const key = `${event.pubkey}:${event.kind}:${dTagValue}`
             if (existingKeys.has(key)) continue
             existingKeys.add(key)
 
-            const app = this.createAppFromListingEvent(event)
+            const app = this.createAppFromManifestEvent(event)
             if (!app) continue
 
             candidateEntries.push({ app, event })
           }
 
-          // Stream-verify site manifests — apps appear as soon as confirmed
-          const verifiedEntries = await this.filterByManifest(candidateEntries)
-          const pendingListingEvents = verifiedEntries.map(e => e.event)
-          const newAppCount = verifiedEntries.length
+          this.apps$([...this.apps$(), ...candidateEntries.map(entry => entry.app)])
+          const pendingManifestEvents = candidateEntries.map(entry => entry.event)
+          const newAppCount = candidateEntries.length
 
           // Update pagination cursor
           if (rawEventCount > 0) {
@@ -137,8 +133,8 @@ f('nappsIndex', function () {
           }
 
           // Fetch icons and profiles in the background (fire-and-forget)
-          if (pendingListingEvents.length > 0) {
-            this.fetchIconsAndProfiles(pendingListingEvents)
+          if (pendingManifestEvents.length > 0) {
+            this.fetchIconsAndProfiles(pendingManifestEvents)
           }
         }
 
@@ -150,96 +146,39 @@ f('nappsIndex', function () {
       }
     },
 
-    // Builds a lightweight app object from an app listing event (no icon yet)
-    createAppFromListingEvent (listingEvent) {
-      const dTagArray = getTagValue(listingEvent.tags, 'd')
+    // Builds a lightweight app object directly from a unified manifest.
+    createAppFromManifestEvent (manifestEvent) {
+      const dTagArray = getTagValue(manifestEvent.tags, 'd')
       if (!dTagArray?.[0]) return null
       const dTag = dTagArray[0]
-
-      const channelTag = getTagValue(listingEvent.tags, 'c')
-      const channelValue = trimOrEmpty(channelTag?.[0]).toLowerCase()
-
-      let bundleKind = DEFAULT_MANIFEST_KIND
-      if (channelValue === 'next') bundleKind = 35129
-      if (channelValue === 'draft') bundleKind = 35130
+      const bundleKind = [35128, 35129, 35130].includes(manifestEvent.kind)
+        ? manifestEvent.kind
+        : DEFAULT_MANIFEST_KIND
 
       const encodedApp = appEncode({
         dTag,
-        pubkey: listingEvent.pubkey,
+        pubkey: manifestEvent.pubkey,
         kind: bundleKind
       })
-
-      const nameTag = getTagValue(listingEvent.tags, 'name')
-      const summaryTag = getTagValue(listingEvent.tags, 'summary')
-      const iconTag = getTagValue(listingEvent.tags, 'icon')
+      const metadata = getManifestMetadata(manifestEvent)
+      const icon = findMarkedManifestAsset(manifestEvent, 'icon')
 
       return {
         id: encodedApp,
         dTag,
-        pubkey: listingEvent.pubkey,
+        pubkey: manifestEvent.pubkey,
         kind: bundleKind,
-        name: trimOrEmpty(nameTag?.[0]) || dTag,
-        description: trimOrEmpty(summaryTag?.[0]) || 'No description',
-        iconFx: iconTag?.[0] || null,
-        uploadedAt: listingEvent.created_at * 1000
+        name: metadata.name || dTag,
+        description: metadata.description || metadata.summary || 'No description',
+        iconFx: icon?.root || null,
+        uploadedAt: manifestEvent.created_at * 1000
       }
     },
 
-    // Stream-verifies candidate apps against site manifest events on authors' write relays,
-    // adding each confirmed app to the UI as soon as its manifest arrives
-    async filterByManifest (entries) {
-      if (entries.length === 0) return entries
-
-      const candidateMap = new Map(
-        entries.map(e => [`${e.app.pubkey}:${e.app.kind}:${e.app.dTag}`, e])
-      )
-
+    // Background task: fetches profiles and manifest-marked icons.
+    async fetchIconsAndProfiles (manifestEvents) {
       try {
-        const authors = [...new Set(entries.map(e => e.app.pubkey))]
-        const dTags = [...new Set(entries.map(e => e.app.dTag))]
-        const manifestKinds = [...new Set(entries.map(e => e.app.kind))]
-
-        const relaysByAuthor = await getRelaysByPubkey(authors)
-        const relayToAuthors = pickRelaysForPubkeys(authors, relaysByAuthor)
-
-        const verified = []
-        const generators = [...relayToAuthors.entries()].map(([relay, relayAuthors]) =>
-          nostrRelays.getEventsGenerator(
-            { kinds: manifestKinds, authors: relayAuthors, '#d': dTags, limit: entries.length, search: 'include:spam' },
-            [relay],
-            { timeout: 10000 }
-          )
-        )
-
-        await Promise.all(generators.map(async (generator) => {
-          for await (const item of generator) {
-            if (item.type !== 'event') continue
-            const e = item.event
-            const dTag = e.tags.find(t => t[0] === 'd')?.[1]
-            const key = `${e.pubkey}:${e.kind}:${dTag}`
-            const entry = candidateMap.get(key)
-            if (!entry) continue
-            candidateMap.delete(key)
-            verified.push(entry)
-            this.apps$([...this.apps$(), entry.app])
-          }
-        }))
-
-        return verified
-      } catch (err) {
-        console.error('Failed to verify manifests:', err)
-        const remaining = [...candidateMap.values()]
-        if (remaining.length > 0) {
-          this.apps$([...this.apps$(), ...remaining.map(e => e.app)])
-        }
-        return entries
-      }
-    },
-
-    // Background task: fetches profiles and icons for a batch of app listing events
-    async fetchIconsAndProfiles (listingEvents) {
-      try {
-        const authorPubkeys = [...new Set(listingEvents.map(e => e.pubkey))]
+        const authorPubkeys = [...new Set(manifestEvents.map(e => e.pubkey))]
 
         const [relaysByAuthor, blossomServersByAuthor] = await Promise.all([
           getRelaysByPubkey(authorPubkeys),
@@ -250,42 +189,39 @@ f('nappsIndex', function () {
         const iconCache = lru.ns('apps')
 
         await Promise.all(
-          listingEvents.map(async (listingEvent) => {
+          manifestEvents.map(async (manifestEvent) => {
             try {
-              const iconTag = getTagValue(listingEvent.tags, 'icon')
-              if (!iconTag?.[0]) return
+              const icon = findMarkedManifestAsset(manifestEvent, 'icon')
+              if (!icon) return
 
-              const [iconRootHash, iconMimeType] = iconTag
-              const app = this.createAppFromListingEvent(listingEvent)
+              const app = this.createAppFromManifestEvent(manifestEvent)
               if (!app) return
 
               const cacheKey = `appById_${app.id}_icon`
               const cachedIcon = iconCache.getItem(cacheKey)
 
-              if (cachedIcon?.fx === iconRootHash && cachedIcon?.url) return
-
-              const serviceTag = getTagValue(listingEvent.tags, 'service')
-              const service = serviceTag?.[0] || 'blossom'
+              if (cachedIcon?.fx === icon.root && cachedIcon?.url) return
 
               let iconUrl
-              if (service === 'blossom') {
-                const servers = blossomServersByAuthor[listingEvent.pubkey] || []
+              if (icon.service === 'blossom') {
+                const servers = blossomServersByAuthor[manifestEvent.pubkey] || []
                 if (servers.length > 0) {
-                  iconUrl = `${servers[0].replace(/\/$/, '')}/${iconRootHash}`
+                  iconUrl = `${servers[0].replace(/\/$/, '')}/${icon.root}`
                 }
               } else {
                 iconUrl = await fetchFileDataUrl({
-                  pubkey: listingEvent.pubkey,
-                  rootHash: iconRootHash,
-                  mimeType: iconMimeType,
-                  relays: [...new Set([...relaysByAuthor[listingEvent.pubkey].write, B_RELAY])],
+                  pubkey: manifestEvent.pubkey,
+                  rootHash: icon.root,
+                  mimeType: icon.mimeType,
+                  size: icon.size,
+                  relays: [...new Set([...relaysByAuthor[manifestEvent.pubkey].write, B_RELAY])],
                   maxSizeBytes: MAX_ICON_SIZE_BYTES
                 })
               }
 
               if (iconUrl) {
                 try {
-                  iconCache.setItem(cacheKey, { fx: iconRootHash, url: iconUrl })
+                  iconCache.setItem(cacheKey, { fx: icon.root, url: iconUrl })
                 } catch (err) {
                   console.error('Failed to cache icon:', err)
                 }
