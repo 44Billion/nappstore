@@ -1,6 +1,6 @@
 import { f, useClosestStore, useStore, useTask } from '#f'
 import '#f/components/f-to-signals.js'
-import { npubDecode, appEncode } from '#helpers/nostr/nip19.js'
+import { npubDecode, appEncode } from 'libp2r2p/nip19'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'

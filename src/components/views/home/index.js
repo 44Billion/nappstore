@@ -1,6 +1,6 @@
 import { f, useStore, useTask } from '#f'
 import { cssVars } from '#assets/styles/theme.js'
-// import { npubEncode } from '#helpers/nostr/nip19.js'
+// import { npubEncode } from 'libp2r2p/nip19'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 // import useLocation from '#hooks/use-location.js'
 import logo from '#assets/media/plusapp.webp'

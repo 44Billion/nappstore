@@ -10,7 +10,7 @@ import {
 import publishApp from 'nappup'
 import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
-import { appEncode, appDecode } from '#helpers/nostr/nip19.js'
+import { appEncode, appDecode } from 'libp2r2p/nip19'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import nostrRelays, { nappRelays } from '#services/nostr-relays.js'
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'

@@ -1,6 +1,6 @@
 import { f, useStore, useTask, useSignal } from '#f'
 import '#f/components/f-to-signals.js'
-import { appEncode } from '#helpers/nostr/nip19.js'
+import { appEncode } from 'libp2r2p/nip19'
 import { getRelaysByPubkey, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
 import { fetchFileDataUrl } from '#services/app-metadata-fetcher.js'

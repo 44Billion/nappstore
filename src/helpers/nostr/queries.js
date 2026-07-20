@@ -1,5 +1,5 @@
 import nostrRelays, { seedRelays, freeRelays } from '#services/nostr-relays.js'
-import { npubEncode } from '#helpers/nostr/nip19.js'
+import { npubEncode } from 'libp2r2p/nip19'
 import { getSvgAvatar } from '#helpers/avatar.js'
 import { getRandomId } from '#helpers/misc.js'
 import { maybeUnref } from '#helpers/timer.js'

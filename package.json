@@ -38,8 +38,7 @@
     "#views/*": "./src/components/views/*"
   },
   "dependencies": {
-    "@scure/base": "^2.0.0",
-    "libp2r2p": "^0.1.0",
+    "libp2r2p": "^0.3.0",
     "nappup": "^2.0.0",
     "nmmr": "^2.0.0",
     "nostr-tools": "^2.16.2",

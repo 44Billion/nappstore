@@ -1,4 +1,5 @@
 import NMMR from 'nmmr'
+import { bytesToBase16 } from 'libp2r2p/base16'
 import { decode as base93Decode } from 'libp2r2p/base93'
 import nostrRelays from '#services/nostr-relays.js'
 import { extractHtmlMetadata } from '#services/app-metadata.js'
@@ -44,12 +45,8 @@ export function deduplicateEvents (events) {
   return [...byAddress.values()]
 }
 
-function bytesToHex (bytes) {
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
 async function sha256Hex (bytes) {
-  return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))
+  return bytesToBase16(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))
 }
 
 function parseIrfsChunk (event, root) {
