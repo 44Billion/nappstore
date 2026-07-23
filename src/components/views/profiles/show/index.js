@@ -3,7 +3,7 @@ import '#f/components/f-to-signals.js'
 import { npubDecode, appEncode } from 'libp2r2p/nip19'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
-import nostrRelays from '#services/nostr-relays.js'
+import nostrRelays, { sendEventReport } from '#services/nostr-relays.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
@@ -76,7 +76,8 @@ f('profilesShow', function () {
 
         // Sign and publish
         const signedEvent = await window.nostr.signEvent(newEvent)
-        await nostrRelays.publishEvent(signedEvent, writeRelays)
+        const report = await sendEventReport(signedEvent, writeRelays)
+        if (!report.success) throw new Error('No relay accepted the follow event')
 
         store.isFollowing$(!isCurrentlyFollowing)
         showToast(

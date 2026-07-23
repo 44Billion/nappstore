@@ -12,7 +12,7 @@ import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
 import { appEncode, appDecode } from 'libp2r2p/nip19'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
-import nostrRelays, { nappRelays } from '#services/nostr-relays.js'
+import nostrRelays, { nappRelays, sendEventReport } from '#services/nostr-relays.js'
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import lru from '#services/lru.js'
@@ -211,7 +211,7 @@ f('nappsUpload', function () {
             content: ''
           }
           const signedEvent = await window.nostr.signEvent(deletionEvent)
-          return nostrRelays.sendEvent(signedEvent, allRelays)
+          return sendEventReport(signedEvent, allRelays)
         }))
 
         const totalAttempts = toDelete.length * allRelays.length
