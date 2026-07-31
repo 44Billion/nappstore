@@ -38,7 +38,7 @@
     "#views/*": "./src/components/views/*"
   },
   "dependencies": {
-    "libp2r2p": "^0.9.0",
+    "libp2r2p": "^0.10.1",
     "nappup": "^2.2.0",
     "nmmr": "^2.0.0",
     "thenameisf": "^1.1.1",
