@@ -207,8 +207,23 @@ async function assetBytes (asset, pubkey, relays, blossomServers, maxSizeBytes) 
   return fetchFileFromChunks(pubkey, asset.root, relays, { maxSizeBytes, size: asset.size })
 }
 
+function manifestHints (manifestEvent, tagName) {
+  return (Array.isArray(manifestEvent?.tags) ? manifestEvent.tags : [])
+    .filter(tag => Array.isArray(tag) && tag[0] === tagName && typeof tag[1] === 'string')
+    .map(tag => tag[1].trim())
+    .filter(Boolean)
+}
+
 // Reads metadata from the manifest first and uses HTML/favicon only as fallback.
 export async function fetchAppMetadata (manifestEvent, relays, { blossomServers } = {}) {
+  const effectiveRelays = [...new Set([
+    ...manifestHints(manifestEvent, 'relay'),
+    ...(Array.isArray(relays) ? relays : [])
+  ])]
+  const effectiveBlossomServers = [...new Set([
+    ...manifestHints(manifestEvent, 'server'),
+    ...(Array.isArray(blossomServers) ? blossomServers : [])
+  ])]
   const direct = getManifestMetadata(manifestEvent)
   const metadata = {
     name: direct.name,
@@ -220,7 +235,13 @@ export async function fetchAppMetadata (manifestEvent, relays, { blossomServers 
     if (!metadata.name || !metadata.description) {
       const indexAsset = findManifestPathAsset(manifestEvent, path => path === 'index.html' || path === 'index.htm')
       if (indexAsset) {
-        const chunks = await assetBytes(indexAsset, manifestEvent.pubkey, relays, blossomServers, DEFAULT_METADATA_FILE_LIMIT)
+        const chunks = await assetBytes(
+          indexAsset,
+          manifestEvent.pubkey,
+          effectiveRelays,
+          effectiveBlossomServers,
+          DEFAULT_METADATA_FILE_LIMIT
+        )
         if (chunks) {
           const extracted = extractHtmlMetadata(chunksToText(chunks))
           metadata.name ||= extracted.name
@@ -237,10 +258,10 @@ export async function fetchAppMetadata (manifestEvent, relays, { blossomServers 
     }
     if (iconAsset) {
       if (iconAsset.service === 'blossom') {
-        const url = buildBlossomUrl(iconAsset.root, blossomServers)
+        const url = buildBlossomUrl(iconAsset.root, effectiveBlossomServers)
         if (url) metadata.icon = { fx: iconAsset.root, url }
       } else {
-        const chunks = await fetchFileFromChunks(manifestEvent.pubkey, iconAsset.root, relays, {
+        const chunks = await fetchFileFromChunks(manifestEvent.pubkey, iconAsset.root, effectiveRelays, {
           maxSizeBytes: DEFAULT_METADATA_FILE_LIMIT,
           size: iconAsset.size
         })

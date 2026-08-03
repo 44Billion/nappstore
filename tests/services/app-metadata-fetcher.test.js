@@ -81,6 +81,40 @@ describe('app metadata fetcher v2', () => {
     assert.equal(consoleWarn.mock.callCount(), 1)
   })
 
+  it('uses manifest server hints for legacy HTML and favicon fallbacks', async () => {
+    const html = new TextEncoder().encode(`
+      <title>OpenDork</title>
+      <meta name="description" content="Nostr-native terminal AI workspace">
+    `)
+    const indexRoot = sha256Hex(html)
+    const faviconRoot = '7'.repeat(64)
+    mock.method(globalThis, 'fetch', async url => {
+      assert.equal(url, `https://blossom.test/${indexRoot}`)
+      return new Response(html, { status: 200 })
+    })
+
+    const metadata = await fetchAppMetadata({
+      pubkey: 'a'.repeat(64),
+      tags: [
+        ['d', 'opendork'],
+        ['path', '/index.html', indexRoot],
+        ['path', '/favicon.ico', faviconRoot],
+        ['server', 'https://blossom.test'],
+        ['title', 'opendork'],
+        ['description', 'Direct manifest description']
+      ]
+    }, [])
+
+    assert.deepEqual(metadata, {
+      name: 'OpenDork',
+      description: 'Direct manifest description',
+      icon: {
+        fx: faviconRoot,
+        url: `https://blossom.test/${faviconRoot}`
+      }
+    })
+  })
+
   it('uses manifest name, description and marked Blossom icon without HTML fallback', async () => {
     const root = 'f'.repeat(64)
     const metadata = await fetchAppMetadata({

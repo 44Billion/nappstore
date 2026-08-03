@@ -3,7 +3,7 @@ import '#f/components/f-to-signals.js'
 import { appEncode } from 'libp2r2p/nip19'
 import { getRelaysByPubkey, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
 import nostrRelays from '#services/nostr-relays.js'
-import { fetchFileDataUrl } from '#services/app-metadata-fetcher.js'
+import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import { findMarkedManifestAsset, getManifestMetadata } from '#helpers/manifest.js'
 import { cssVars } from '#assets/styles/theme.js'
 import lru from '#services/lru.js'
@@ -13,7 +13,6 @@ import '#shared/avatar.js'
 const B_RELAY = 'wss://relay.44billion.net'
 const APPS_PER_PAGE = 20
 const DEFAULT_MANIFEST_KIND = 35128
-const MAX_ICON_SIZE_BYTES = 5.5 * 1024 * 1024
 
 function getTagValue (tags, key) {
   if (!Array.isArray(tags)) return null
@@ -132,9 +131,9 @@ f('nappsIndex', function () {
             this.hasMore$(false)
           }
 
-          // Fetch icons and profiles in the background (fire-and-forget)
+          // Resolve metadata fallbacks and profiles in the background (fire-and-forget)
           if (pendingManifestEvents.length > 0) {
-            this.fetchIconsAndProfiles(pendingManifestEvents)
+            this.fetchMetadataAndProfiles(pendingManifestEvents)
           }
         }
 
@@ -175,8 +174,8 @@ f('nappsIndex', function () {
       }
     },
 
-    // Background task: fetches profiles and manifest-marked icons.
-    async fetchIconsAndProfiles (manifestEvents) {
+    // Background task: resolves HTML/favicon fallbacks and fetches profiles.
+    async fetchMetadataAndProfiles (manifestEvents) {
       try {
         const authorPubkeys = [...new Set(manifestEvents.map(e => e.pubkey))]
 
@@ -187,52 +186,50 @@ f('nappsIndex', function () {
         ])
 
         const iconCache = lru.ns('apps')
+        const metadataByAppId = new Map()
 
         await Promise.all(
           manifestEvents.map(async (manifestEvent) => {
             try {
-              const icon = findMarkedManifestAsset(manifestEvent, 'icon')
-              if (!icon) return
-
               const app = this.createAppFromManifestEvent(manifestEvent)
               if (!app) return
 
-              const cacheKey = `appById_${app.id}_icon`
-              const cachedIcon = iconCache.getItem(cacheKey)
+              const relays = [...new Set([
+                ...(relaysByAuthor[manifestEvent.pubkey]?.write || []),
+                B_RELAY
+              ])]
+              const metadata = await fetchAppMetadata(manifestEvent, relays, {
+                blossomServers: blossomServersByAuthor[manifestEvent.pubkey] || []
+              })
+              metadataByAppId.set(app.id, metadata)
 
-              if (cachedIcon?.fx === icon.root && cachedIcon?.url) return
-
-              let iconUrl
-              if (icon.service === 'blossom') {
-                const servers = blossomServersByAuthor[manifestEvent.pubkey] || []
-                if (servers.length > 0) {
-                  iconUrl = `${servers[0].replace(/\/$/, '')}/${icon.root}`
-                }
-              } else {
-                iconUrl = await fetchFileDataUrl({
-                  pubkey: manifestEvent.pubkey,
-                  rootHash: icon.root,
-                  mimeType: icon.mimeType,
-                  size: icon.size,
-                  relays: [...new Set([...relaysByAuthor[manifestEvent.pubkey].write, B_RELAY])],
-                  maxSizeBytes: MAX_ICON_SIZE_BYTES
-                })
-              }
-
-              if (iconUrl) {
+              if (metadata.icon?.url) {
                 try {
-                  iconCache.setItem(cacheKey, { fx: icon.root, url: iconUrl })
+                  iconCache.setItem(`appById_${app.id}_icon`, metadata.icon)
                 } catch (err) {
                   console.error('Failed to cache icon:', err)
                 }
               }
             } catch (err) {
-              console.error('Failed to fetch icon:', err)
+              console.error('Failed to fetch app metadata:', err)
             }
           })
         )
+
+        if (metadataByAppId.size > 0) {
+          this.apps$(apps => apps.map(app => {
+            const metadata = metadataByAppId.get(app.id)
+            if (!metadata) return app
+            return {
+              ...app,
+              name: metadata.name || app.name,
+              description: metadata.description || app.description,
+              iconFx: metadata.icon?.fx || app.iconFx
+            }
+          }))
+        }
       } catch (err) {
-        console.error('Failed to fetch icons and profiles:', err)
+        console.error('Failed to fetch app metadata and profiles:', err)
       }
     },
 
