@@ -2,7 +2,7 @@ import { f, useStore, useTask, useSignal } from '#f'
 import '#f/components/f-to-signals.js'
 import { appEncode } from 'libp2r2p/nip19'
 import { getRelaysByPubkey, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
-import nostrRelays from '#services/nostr-relays.js'
+import nostrRelays, { nappRelays } from '#services/nostr-relays.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import { findMarkedManifestAsset, getManifestMetadata } from '#helpers/manifest.js'
 import { cssVars } from '#assets/styles/theme.js'
@@ -11,7 +11,6 @@ import lru from '#services/lru.js'
 import '#shared/app-icon.js'
 import '#shared/avatar.js'
 
-const B_RELAY = 'wss://relay.44billion.net'
 const APPS_PER_PAGE = 20
 const DEFAULT_MANIFEST_KIND = 35128
 
@@ -82,7 +81,7 @@ f('nappsIndex', function () {
           // A manifest already carries files, media, and listing metadata.
           const generator = nostrRelays.getEventsGenerator(
             filter,
-            [B_RELAY],
+            nappRelays,
             { timeout: 20000 }
           )
 
@@ -197,7 +196,7 @@ f('nappsIndex', function () {
 
               const relays = [...new Set([
                 ...(relaysByAuthor[manifestEvent.pubkey]?.write || []),
-                B_RELAY
+                ...nappRelays
               ])]
               const metadata = await fetchAppMetadata(manifestEvent, relays, {
                 blossomServers: blossomServersByAuthor[manifestEvent.pubkey] || []

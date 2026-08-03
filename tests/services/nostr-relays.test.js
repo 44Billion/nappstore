@@ -2,7 +2,15 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { relayPool } from 'libp2r2p/relay'
 
-import relays, { sendEventReport } from '#services/nostr-relays.js'
+import relays, { nappRelays, sendEventReport } from '#services/nostr-relays.js'
+
+test('exports the shared app discovery relays', () => {
+  assert.deepEqual(nappRelays, [
+    'wss://relay.44billion.net',
+    'wss://relay.ditto.pub',
+    'wss://relay.dreamith.to'
+  ])
+})
 
 test('uses RelayPool with its 500 ms first-EOSE grace default', async t => {
   assert.equal(relays, relayPool)
