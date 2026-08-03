@@ -8,18 +8,10 @@
   "scripts": {
     "start": "NODE_ENV=development node bin/build.js",
     "build": "NODE_ENV=production node bin/build.js",
+    "upload": "npm run build && npx --yes nappup@latest ./dist/nappstore/",
     "serve": "python3 server.py",
     "test": "node --test 'tests/**/*.test.js'",
     "test:only": "node --test --test-only 'tests/**/*.test.js'"
-  },
-  "devDependencies": {
-    "core-js": "^3.46.0",
-    "esbuild": "^0.25.1",
-    "eslint": "^9.22.0",
-    "eslint-plugin-html": "^8.1.2",
-    "globals": "^15.12.0",
-    "jsonc-parser": "^3.3.1",
-    "neostandard": "^0.12.1"
   },
   "imports": {
     "#f": "thenameisf",
@@ -39,9 +31,18 @@
   },
   "dependencies": {
     "libp2r2p": "^0.10.1",
-    "nappup": "^2.2.0",
+    "nappup": "^2.3.2",
     "nmmr": "^2.0.0",
     "thenameisf": "^1.1.1",
     "url-router": "^13.0.0"
+  },
+  "devDependencies": {
+    "core-js": "^3.46.0",
+    "esbuild": "^0.25.1",
+    "eslint": "^9.22.0",
+    "eslint-plugin-html": "^8.1.2",
+    "globals": "^15.12.0",
+    "jsonc-parser": "^3.3.1",
+    "neostandard": "^0.12.1"
   }
 }
