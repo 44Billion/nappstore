@@ -5,6 +5,7 @@ import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import nostrRelays, { sendEventReport } from '#services/nostr-relays.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
+import { getAppLauncherUrl } from '#helpers/launcher-url.js'
 import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
 import { setSessionStorageItem } from '#hooks/use-web-storage.js'
@@ -99,8 +100,7 @@ f('profilesShow', function () {
         pubkey: app.pubkey,
         kind: 35128
       })
-      const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
-      window.open(url, '_blank')
+      window.open(getAppLauncherUrl(encodedApp), '_blank')
     }
   }))
 

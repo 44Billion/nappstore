@@ -6,6 +6,7 @@ import nostrRelays from '#services/nostr-relays.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import { findMarkedManifestAsset, getManifestMetadata } from '#helpers/manifest.js'
 import { cssVars } from '#assets/styles/theme.js'
+import { getAppLauncherUrl } from '#helpers/launcher-url.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
 import '#shared/avatar.js'
@@ -254,8 +255,7 @@ f('nappsIndex', function () {
         pubkey: app.pubkey,
         kind: app.kind
       })
-      const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
-      window.open(url, '_blank')
+      window.open(getAppLauncherUrl(encodedApp), '_blank')
     }
   }))
 

@@ -15,6 +15,7 @@ import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import nostrRelays, { nappRelays, sendEventReport } from '#services/nostr-relays.js'
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
+import { getAppLauncherUrl } from '#helpers/launcher-url.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
 import '#shared/icons/icon-circle-number-1-filled.js'
@@ -250,7 +251,7 @@ f('nappsUpload', function () {
           pubkey: app.pubkey,
           kind: app.kind || 35128
         })
-        const url = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
+        const url = getAppLauncherUrl(encodedApp)
         await navigator.clipboard.writeText(url)
         showToast('URL copied to clipboard!', 'success', 2000)
       } catch (err) {
@@ -619,7 +620,7 @@ f('nappsUpload', function () {
                       pubkey: app.pubkey,
                       kind: app.kind || 35128
                     })
-                    const appUrl = `${IS_PRODUCTION ? 'https://44billion.net' : 'http://localhost:10000'}/${encodedApp}`
+                    const appUrl = getAppLauncherUrl(encodedApp)
 
                     return this.h({ key: app.id })`
                       <f-to-signals
