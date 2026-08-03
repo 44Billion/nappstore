@@ -1,47 +1,63 @@
 import nostrRelays, { seedRelays, freeRelays } from '#services/nostr-relays.js'
 import { npubEncode } from 'libp2r2p/nip19'
+import { pickRelaysForPubkeys } from 'libp2r2p/relay'
 import { getSvgAvatar } from '#helpers/avatar.js'
 import { getRandomId } from '#helpers/misc.js'
 import { maybeUnref } from '#helpers/timer.js'
 
-const DEFAULT_RELAYS_PER_PUBKEY = 2
+export { pickRelaysForPubkeys }
 
-// Given pubkeys and their relay mappings, picks the minimum set of relays
-// that covers all pubkeys (up to maxPerPubkey relays each), preferring
-// relays shared by more pubkeys.
-// Returns Map<relayUrl, pubkey[]>.
-export function pickRelaysForPubkeys (pubkeys, relaysByPubkey, { maxPerPubkey = DEFAULT_RELAYS_PER_PUBKEY } = {}) {
-  const pkToPossibleRelays = new Map()
-  for (const pk of pubkeys) {
-    const wr = relaysByPubkey[pk]?.write || []
-    pkToPossibleRelays.set(pk, new Set(wr.length > 0 ? wr : freeRelays.slice(0, DEFAULT_RELAYS_PER_PUBKEY)))
-  }
+const PROFILE_CACHE_TTL = 3 * 60 * 1000
+const profilesByPubkey = {}
+const profileRequestsByPubkey = new Map()
 
-  const relayCounts = new Map()
-  for (const relays of pkToPossibleRelays.values()) {
-    for (const r of relays) {
-      relayCounts.set(r, (relayCounts.get(r) || 0) + 1)
-    }
-  }
-  const rankedRelays = [...relayCounts.keys()].sort((a, b) => relayCounts.get(b) - relayCounts.get(a))
-
-  const relayToAuthors = new Map()
-  for (const pk of pubkeys) {
-    const possibleRelays = pkToPossibleRelays.get(pk)
-    let assigned = 0
-    for (const r of rankedRelays) {
-      if (assigned >= maxPerPubkey) break
-      if (!possibleRelays.has(r)) continue
-      if (!relayToAuthors.has(r)) relayToAuthors.set(r, [])
-      relayToAuthors.get(r).push(pk)
-      assigned++
-    }
-  }
-
-  return relayToAuthors
+function cacheProfile (pubkey, profile) {
+  profilesByPubkey[pubkey] = profile
+  maybeUnref(setTimeout(() => {
+    if (profilesByPubkey[pubkey] === profile) delete profilesByPubkey[pubkey]
+  }, PROFILE_CACHE_TTL))
 }
 
-const profilesByPubkey = {}
+async function createFallbackProfile (pubkey, getAvatar) {
+  return {
+    name: `User#${getRandomId().slice(0, 5)}`,
+    about: '',
+    picture: `data:image/svg+xml;charset=utf-8,${
+      encodeURIComponent(await getAvatar(pubkey))
+    }`,
+    npub: npubEncode(pubkey),
+    meta: { events: [] }
+  }
+}
+
+async function loadMissingProfiles (pubkeys, { nostrRelays, getRelaysByPubkey, getAvatar }) {
+  const relaysByAuthor = await getRelaysByPubkey(pubkeys)
+  const relayToAuthors = pickRelaysForPubkeys(pubkeys, relaysByAuthor)
+
+  const results = await Promise.all(
+    [...relayToAuthors.entries()]
+      .map(([relay, authors]) =>
+        nostrRelays.getEvents({ kinds: [0], authors }, [relay])
+      )
+  )
+  const allEvents = results.flatMap(r => r.result)
+
+  const latestByPk = {}
+  for (const event of allEvents) {
+    if (!latestByPk[event.pubkey] || event.created_at > latestByPk[event.pubkey].created_at) {
+      latestByPk[event.pubkey] = event
+    }
+  }
+
+  await Promise.all(pubkeys.map(async (pubkey) => {
+    const event = latestByPk[pubkey]
+    const profile = event
+      ? await eventToProfile(event, { _getSvgAvatar: getAvatar })
+      : await createFallbackProfile(pubkey, getAvatar)
+    cacheProfile(pubkey, profile)
+  }))
+}
+
 /**
  * Fetches profiles for multiple pubkeys efficiently.
  * Uses the minimum set of write relays that cover all pubkeys.
@@ -50,54 +66,34 @@ export async function getProfiles (pubkeys,
   { _nostrRelays = nostrRelays, _getRelaysByPubkey = getRelaysByPubkey, _getSvgAvatar = getSvgAvatar } = {}
 ) {
   const missingPubkeys = [...new Set(pubkeys)].filter(pk => !profilesByPubkey[pk])
-  if (missingPubkeys.length > 0) {
-    const relaysByAuthor = await _getRelaysByPubkey(missingPubkeys)
-    const relayToAuthors = pickRelaysForPubkeys(missingPubkeys, relaysByAuthor)
+  const pubkeysToLoad = missingPubkeys.filter(pk => !profileRequestsByPubkey.has(pk))
 
-    const results = await Promise.all(
-      [...relayToAuthors.entries()]
-        .map(([relay, authors]) =>
-          _nostrRelays.getEvents({ kinds: [0], authors }, [relay])
-        )
-    )
-    const allEvents = results.flatMap(r => r.result)
-
-    const latestByPk = {}
-    for (const event of allEvents) {
-      if (!latestByPk[event.pubkey] || event.created_at > latestByPk[event.pubkey].created_at) {
-        latestByPk[event.pubkey] = event
+  if (pubkeysToLoad.length > 0) {
+    const request = loadMissingProfiles(pubkeysToLoad, {
+      nostrRelays: _nostrRelays,
+      getRelaysByPubkey: _getRelaysByPubkey,
+      getAvatar: _getSvgAvatar
+    }).finally(() => {
+      for (const pubkey of pubkeysToLoad) {
+        if (profileRequestsByPubkey.get(pubkey) === request) {
+          profileRequestsByPubkey.delete(pubkey)
+        }
       }
-    }
+    })
 
-    for (const pk of missingPubkeys) {
-      const event = latestByPk[pk]
-      if (event) {
-        profilesByPubkey[pk] = await eventToProfile(event, { _getSvgAvatar })
-        maybeUnref(setTimeout(
-          () => { delete profilesByPubkey[pk] },
-          3 * 60 * 1000
-        ))
-      }
+    for (const pubkey of pubkeysToLoad) {
+      profileRequestsByPubkey.set(pubkey, request)
     }
   }
 
-  const finalResults = {}
-  for (const pk of pubkeys) {
-    if (profilesByPubkey[pk]) {
-      finalResults[pk] = profilesByPubkey[pk]
-    } else {
-      finalResults[pk] = {
-        name: `User#${getRandomId().slice(0, 5)}`,
-        about: '',
-        picture: `data:image/svg+xml;charset=utf-8,${
-          window.encodeURIComponent(await _getSvgAvatar(pk))
-        }`,
-        npub: npubEncode(pk),
-        meta: { events: [] }
-      }
-    }
-  }
-  return finalResults
+  await Promise.all([...new Set(
+    missingPubkeys.map(pk => profileRequestsByPubkey.get(pk)).filter(Boolean)
+  )])
+
+  return pubkeys.reduce((profiles, pubkey) => {
+    profiles[pubkey] = profilesByPubkey[pubkey]
+    return profiles
+  }, {})
 }
 
 // Returns the profile for a single pubkey.
@@ -142,7 +138,7 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
         .map(t => t[1]?.trim?.())[0] ||
       eventContent.picture?.trim?.() ||
       `data:image/svg+xml;charset=utf-8,${
-        window.encodeURIComponent(await _getSvgAvatar(event.pubkey))
+        encodeURIComponent(await _getSvgAvatar(event.pubkey))
       }`,
     npub: npubEncode(event.pubkey),
     meta: {

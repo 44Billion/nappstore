@@ -30,6 +30,8 @@
     "#views/*": "./src/components/views/*"
   },
   "dependencies": {
+    "@dicebear/core": "^10.4.0",
+    "@dicebear/styles": "^10.3.0",
     "libp2r2p": "^0.10.1",
     "nappup": "^2.3.2",
     "nmmr": "^2.0.0",

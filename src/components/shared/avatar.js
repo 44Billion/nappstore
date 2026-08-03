@@ -12,7 +12,7 @@ import lru from '#services/lru.js'
 f('aAvatar', function () {
   const pk$ = useSignal(this.props.pk$ ?? this.props.pk)
   const storage = useWebStorage(localStorage)
-  const cache$ = useSignal(this.props.profileCache$ ?? this.props.profileCache$ ?? {
+  const cache$ = useSignal(this.props.profileCache$ ?? this.props.profileCache ?? {
     get () {
       return lru.ns('accounts').getReactiveItem(
         `accountByUserPk_${pk$() ?? ''}_profile`,
@@ -46,11 +46,11 @@ f('aAvatar', function () {
       cache.set(profile)
       return profile.picture
     }),
-    svg$: useAsyncComputed(function () {
+    svg$ () {
       const seed = pk$()
       if (!seed) return
       return getSvgAvatar(base62ToBase16(seed, { mode: 'integer', byteLength: 32 }))
-    }),
+    },
     svgStyle$: () => {
       return [
         `svg {
