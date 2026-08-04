@@ -133,7 +133,7 @@ f('nappsUpload', function () {
 
         const { dTag, pubkey, kind } = appDecode(encodedApp)
 
-        // Store icon in sessionStorage for app-icon component
+        // Cache the uploaded icon for app-icon.
         if (faviconUrl && encodedApp) {
           try {
             lru.ns('apps').setItem(`appById_${encodedApp}_icon`, { url: faviconUrl })
@@ -304,21 +304,22 @@ f('nappsUpload', function () {
         Object.values(appsByDTag).map(async (manifestEvent) => {
           try {
             const dTag = manifestEvent.tags.find(t => t[0] === 'd')[1]
-
-            const metadata = await fetchAppMetadata(manifestEvent, writeRelays, { blossomServers })
             const encodedApp = appEncode({
               dTag,
               pubkey: manifestEvent.pubkey,
               kind: manifestEvent.kind
             })
+            const cacheKey = `appById_${encodedApp}_icon`
+            const iconCache = lru.ns('apps')
+            const metadata = await fetchAppMetadata(manifestEvent, writeRelays, {
+              blossomServers,
+              cachedIcon: iconCache.getItem(cacheKey)
+            })
 
-            // Store icon in sessionStorage for app-icon component
-            if (metadata.icon?.url) {
+            // Cache the complete fallback chain for app-icon.
+            if (metadata.icon) {
               try {
-                lru.ns('apps').setItem(
-                  `appById_${encodedApp}_icon`,
-                  { fx: metadata.icon.fx, url: metadata.icon.url }
-                )
+                iconCache.setItem(cacheKey, metadata.icon)
               } catch (err) {
                 console.error('Failed to cache icon:', err)
               }

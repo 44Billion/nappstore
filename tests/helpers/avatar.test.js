@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { getSvgAvatar } from '#helpers/avatar.js'
+import { getSvgAvatar, isValidAvatarPicture } from '#helpers/avatar.js'
 
 function normalizeRandomIds (svg) {
   const suffix = svg.match(/id="[^"]+-([a-f0-9]{6})"/)?.[1]
@@ -28,5 +28,22 @@ describe('local avatars', () => {
 
     assert.notEqual(first, second)
     assert.equal(normalizeRandomIds(first), normalizeRandomIds(second))
+  })
+})
+
+describe('avatar picture validation', () => {
+  it('accepts supported data and HTTP image sources', () => {
+    assert.equal(isValidAvatarPicture('data:image/svg+xml,%3Csvg%3E'), true)
+    assert.equal(isValidAvatarPicture('https://example.test/avatar.webp?size=64'), true)
+  })
+
+  it('rejects relative, non-image and unsafe-looking values', () => {
+    assert.equal(isValidAvatarPicture('/images/avatar.png'), false)
+    assert.equal(isValidAvatarPicture('../images/avatar.svg#face'), false)
+    assert.equal(isValidAvatarPicture('avatar.png'), false)
+    assert.equal(isValidAvatarPicture('javascript:alert(1)'), false)
+    assert.equal(isValidAvatarPicture('https://example.test/profile'), false)
+    assert.equal(isValidAvatarPicture(' avatar.png'), false)
+    assert.equal(isValidAvatarPicture({ src: 'avatar.png' }), false)
   })
 })

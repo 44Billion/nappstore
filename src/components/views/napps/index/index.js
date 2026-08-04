@@ -198,14 +198,16 @@ f('nappsIndex', function () {
                 ...(relaysByAuthor[manifestEvent.pubkey]?.write || []),
                 ...nappRelays
               ])]
+              const cacheKey = `appById_${app.id}_icon`
               const metadata = await fetchAppMetadata(manifestEvent, relays, {
-                blossomServers: blossomServersByAuthor[manifestEvent.pubkey] || []
+                blossomServers: blossomServersByAuthor[manifestEvent.pubkey] || [],
+                cachedIcon: iconCache.getItem(cacheKey)
               })
               metadataByAppId.set(app.id, metadata)
 
-              if (metadata.icon?.url) {
+              if (metadata.icon) {
                 try {
-                  iconCache.setItem(`appById_${app.id}_icon`, metadata.icon)
+                  iconCache.setItem(cacheKey, metadata.icon)
                 } catch (err) {
                   console.error('Failed to cache icon:', err)
                 }
@@ -329,7 +331,7 @@ f('nappsIndex', function () {
       <!-- Apps Grid -->
       ${
   apps.length === 0 && !isLoading
-    ? this.h`
+    ? [this.h`
         <div style=${{
           display: 'flex',
           justifyContent: 'center',
@@ -339,7 +341,7 @@ f('nappsIndex', function () {
         }}>
           No apps found
         </div>
-      `
+      `]
     : apps.map((app, index) => {
       const profile = profileCache[app.pubkey] || {}
       const authorName = profile.name || profile.display_name || 'Anonymous'
@@ -353,6 +355,7 @@ f('nappsIndex', function () {
               app: { id: app.id, index: index + 1, fx: app.iconFx },
               render: ({ h, props }) => h`
                 <div
+                  data-app-id=${app.id}
                   onclick=${() => store.handleOpenApp(app)}
                   style=${{
                     display: 'flex',

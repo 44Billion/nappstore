@@ -1,11 +1,19 @@
 import NMMR from 'nmmr'
 import { bytesToBase16 } from 'libp2r2p/base16'
 import { decode as base93Decode } from 'libp2r2p/base93'
-import nostrRelays from '#services/nostr-relays.js'
-import { extractHtmlMetadata } from '#services/app-metadata.js'
+import { appDecode } from 'libp2r2p/nip19'
+import nostrRelays, { nappRelays } from '#services/nostr-relays.js'
+import { getBlossomServersByPubkey, getRelaysByPubkey } from '#helpers/nostr/queries.js'
+import {
+  extractHtmlMetadata,
+  extractWebManifestIcons,
+  resolveAppPath,
+  resolveExternalImageUrl
+} from '#services/app-metadata.js'
 import {
   findManifestPathAsset,
-  findMarkedManifestAsset,
+  findMarkedManifestAssets,
+  getManifestAssets,
   getManifestMetadata
 } from '#helpers/manifest.js'
 
@@ -161,11 +169,6 @@ async function fetchFromBlossom (asset, blossomServers, maxSizeBytes = null) {
   return null
 }
 
-function buildBlossomUrl (root, blossomServers) {
-  if (!blossomServers?.length) return null
-  return `${blossomServers[0].replace(/\/$/, '')}/${root}`
-}
-
 function chunksToText (binaryChunks) {
   const total = binaryChunks.reduce((sum, chunk) => sum + chunk.length, 0)
   const bytes = new Uint8Array(total)
@@ -214,8 +217,173 @@ function manifestHints (manifestEvent, tagName) {
     .filter(Boolean)
 }
 
-// Reads metadata from the manifest first and uses HTML/favicon only as fallback.
-export async function fetchAppMetadata (manifestEvent, relays, { blossomServers } = {}) {
+// Adds an asset entry once while preserving discovery order.
+function addAssetEntry (entries, seenAssets, asset, source = 'manifest') {
+  if (!asset) return
+  const key = `${asset.service}:${asset.root}`
+  if (seenAssets.has(key)) return
+  seenAssets.add(key)
+  entries.push({ asset, source })
+}
+
+// Resolves every usable icon URL while preserving asset and server priority.
+async function resolveIconCandidates (entries, manifestEvent, relays, blossomServers, cachedIcon) {
+  const candidates = []
+  const seenUrls = new Set()
+  const cachedCandidates = normalizeCachedIconCandidates(cachedIcon)
+  for (const entry of entries) {
+    if (entry.candidate) {
+      if (!seenUrls.has(entry.candidate.url)) {
+        seenUrls.add(entry.candidate.url)
+        candidates.push({ ...entry.candidate, source: entry.source })
+      }
+      continue
+    }
+
+    const { asset, source } = entry
+    if (asset.service === 'blossom') {
+      for (const server of blossomServers) {
+        const url = `${server.replace(/\/$/, '')}/${asset.root}`
+        if (seenUrls.has(url)) continue
+        seenUrls.add(url)
+        candidates.push({ fx: asset.root, url, source })
+      }
+      continue
+    }
+
+    try {
+      const cached = cachedCandidates.find(candidate => candidate.fx === asset.root)
+      if (cached && !seenUrls.has(cached.url)) {
+        seenUrls.add(cached.url)
+        candidates.push({ ...cached, source })
+        continue
+      }
+      const chunks = await fetchFileFromChunks(manifestEvent.pubkey, asset.root, relays, {
+        maxSizeBytes: DEFAULT_METADATA_FILE_LIMIT,
+        size: asset.size
+      })
+      if (!chunks) continue
+      const mimeType = asset.mimeType || 'image/png'
+      const url = await chunksToDataUrl(chunks, mimeType)
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url)
+        candidates.push({ fx: asset.root, url, source })
+      }
+    } catch (error) {
+      console.error(`Failed to resolve icon asset ${asset.root}:`, error)
+    }
+  }
+  return candidates
+}
+
+// Expands HTML sources into signed assets, Web App Manifest icons or remote URLs.
+async function addHtmlIconEntries ({
+  entries,
+  seenAssets,
+  sources,
+  htmlMetadata,
+  indexPath,
+  manifestEvent,
+  relays,
+  blossomServers
+}) {
+  for (const source of sources) {
+    const path = resolveAppPath(source.href, indexPath, htmlMetadata.baseHref)
+    const asset = path && findManifestPathAsset(manifestEvent, candidate => candidate === path)
+
+    if (source.kind === 'manifest') {
+      if (!asset) continue
+      try {
+        const bytes = await assetBytes(
+          asset,
+          manifestEvent.pubkey,
+          relays,
+          blossomServers,
+          DEFAULT_METADATA_FILE_LIMIT
+        )
+        if (!bytes) continue
+        for (const icon of extractWebManifestIcons(chunksToText(bytes))) {
+          const iconPath = resolveAppPath(icon.href, path)
+          const iconAsset = iconPath && findManifestPathAsset(manifestEvent, candidate => candidate === iconPath)
+          if (iconAsset) {
+            addAssetEntry(entries, seenAssets, iconAsset, 'html')
+          } else {
+            const url = resolveExternalImageUrl(icon.href)
+            if (url) entries.push({ candidate: { fx: null, url }, source: 'html' })
+          }
+        }
+      } catch (error) {
+        console.error('Failed to read Web App Manifest icons:', error)
+      }
+      continue
+    }
+
+    if (asset) {
+      addAssetEntry(entries, seenAssets, asset, 'html')
+      continue
+    }
+    const url = resolveExternalImageUrl(source.href, htmlMetadata.baseHref)
+    if (url) entries.push({ candidate: { fx: null, url }, source: 'html' })
+  }
+}
+
+function normalizeCachedIconCandidates (icon) {
+  if (!icon || typeof icon !== 'object') return []
+  const candidates = [icon, ...(Array.isArray(icon.candidates) ? icon.candidates : [])]
+  const seen = new Set()
+  return candidates.flatMap(candidate => {
+    if (typeof candidate?.url !== 'string' || !candidate.url || seen.has(candidate.url)) return []
+    seen.add(candidate.url)
+    return [{
+      fx: typeof candidate.fx === 'string' ? candidate.fx : null,
+      url: candidate.url,
+      source: candidate.source === 'html' ? 'html' : 'manifest'
+    }]
+  })
+}
+
+function mergeCandidates (...groups) {
+  const seen = new Set()
+  return groups.flat().filter(candidate => {
+    if (!candidate?.url || seen.has(candidate.url)) return false
+    seen.add(candidate.url)
+    return true
+  })
+}
+
+// Keeps the primary icon shape compatible while recording discovery freshness.
+function createIconMetadata (candidates, manifestEvent, indexAsset, htmlDiscovered, htmlMetadata) {
+  const first = candidates[0] || { fx: null, url: null }
+  return {
+    fx: first.fx,
+    url: first.url,
+    candidates,
+    manifestEventId: manifestEvent.id || null,
+    htmlRoot: indexAsset?.root || null,
+    htmlDiscovered,
+    htmlName: htmlMetadata?.name,
+    htmlDescription: htmlMetadata?.description
+  }
+}
+
+function getManifestIconAssets (manifestEvent) {
+  const marked = findMarkedManifestAssets(manifestEvent, 'icon')
+  const seenRoots = new Set(marked.map(asset => asset.root))
+  const favicons = getManifestAssets(manifestEvent).flatMap(asset => {
+    const path = asset.paths.find(path =>
+      /^favicon\.(ico|svg|webp|png|jpg|jpeg|gif|avif)$/i.test(path.split('/').pop())
+    )
+    return path && !seenRoots.has(asset.root) ? [{ ...asset, path }] : []
+  })
+  return [...marked, ...favicons]
+}
+
+// Reads direct metadata first and discovers HTML only when it is needed.
+export async function fetchAppMetadata (manifestEvent, relays, {
+  blossomServers,
+  cachedIcon = null,
+  forceHtml = false
+} = {}) {
   const effectiveRelays = [...new Set([
     ...manifestHints(manifestEvent, 'relay'),
     ...(Array.isArray(relays) ? relays : [])
@@ -231,10 +399,45 @@ export async function fetchAppMetadata (manifestEvent, relays, { blossomServers 
     icon: null
   }
 
+  const indexAsset = findManifestPathAsset(manifestEvent, path => path === 'index.html' || path === 'index.htm')
+  const manifestAssets = getManifestIconAssets(manifestEvent)
+  const entries = []
+  const seenAssets = new Set()
+  for (const asset of manifestAssets) addAssetEntry(entries, seenAssets, asset)
+
+  let directCandidates = []
   try {
-    if (!metadata.name || !metadata.description) {
-      const indexAsset = findManifestPathAsset(manifestEvent, path => path === 'index.html' || path === 'index.htm')
-      if (indexAsset) {
+    directCandidates = await resolveIconCandidates(
+      entries,
+      manifestEvent,
+      effectiveRelays,
+      effectiveBlossomServers,
+      cachedIcon
+    )
+  } catch (error) {
+    console.error('Error resolving manifest icon candidates:', error)
+  }
+
+  const cachedHtmlCandidates = cachedIcon?.htmlDiscovered && cachedIcon.htmlRoot === (indexAsset?.root || null)
+    ? normalizeCachedIconCandidates(cachedIcon).filter(candidate => candidate.source === 'html')
+    : []
+  const canReuseHtml = cachedIcon?.htmlDiscovered === true && cachedIcon.htmlRoot === (indexAsset?.root || null)
+  if (canReuseHtml) {
+    metadata.name ||= cachedIcon.htmlName
+    metadata.description ||= cachedIcon.htmlDescription
+  }
+  let htmlCandidates = cachedHtmlCandidates
+  let htmlDiscovered = canReuseHtml
+  let discoveredHtmlMetadata = canReuseHtml
+    ? { name: cachedIcon.htmlName, description: cachedIcon.htmlDescription }
+    : null
+  const shouldReadHtml = forceHtml || !metadata.name || !metadata.description || manifestAssets.length === 0
+
+  if (shouldReadHtml && !htmlDiscovered) {
+    if (!indexAsset) {
+      htmlDiscovered = true
+    } else {
+      try {
         const chunks = await assetBytes(
           indexAsset,
           manifestEvent.pubkey,
@@ -243,38 +446,85 @@ export async function fetchAppMetadata (manifestEvent, relays, { blossomServers 
           DEFAULT_METADATA_FILE_LIMIT
         )
         if (chunks) {
-          const extracted = extractHtmlMetadata(chunksToText(chunks))
-          metadata.name ||= extracted.name
-          metadata.description ||= extracted.description
+          const htmlMetadata = extractHtmlMetadata(chunksToText(chunks))
+          discoveredHtmlMetadata = htmlMetadata
+          metadata.name ||= htmlMetadata.name
+          metadata.description ||= htmlMetadata.description
+          const htmlEntries = []
+          const htmlSeenAssets = new Set(manifestAssets.map(asset => `${asset.service}:${asset.root}`))
+          const specificSources = htmlMetadata.iconSources.filter(source => !['tile-image', 'social-image'].includes(source.kind))
+          const socialSources = htmlMetadata.iconSources.filter(source => ['tile-image', 'social-image'].includes(source.kind))
+          const sourceOptions = {
+            entries: htmlEntries,
+            seenAssets: htmlSeenAssets,
+            htmlMetadata,
+            indexPath: indexAsset.path || 'index.html',
+            manifestEvent,
+            relays: effectiveRelays,
+            blossomServers: effectiveBlossomServers
+          }
+          await addHtmlIconEntries({ ...sourceOptions, sources: specificSources })
+          await addHtmlIconEntries({ ...sourceOptions, sources: socialSources })
+          htmlCandidates = await resolveIconCandidates(
+            htmlEntries,
+            manifestEvent,
+            effectiveRelays,
+            effectiveBlossomServers,
+            cachedIcon
+          )
+          htmlDiscovered = true
         }
+      } catch (error) {
+        console.error('Error fetching HTML app metadata:', error)
       }
     }
-
-    let iconAsset = findMarkedManifestAsset(manifestEvent, 'icon')
-    if (!iconAsset) {
-      iconAsset = findManifestPathAsset(manifestEvent, path =>
-        /^favicon\.(ico|svg|webp|png|jpg|jpeg|gif)$/i.test(path.split('/').pop())
-      )
-    }
-    if (iconAsset) {
-      if (iconAsset.service === 'blossom') {
-        const url = buildBlossomUrl(iconAsset.root, effectiveBlossomServers)
-        if (url) metadata.icon = { fx: iconAsset.root, url }
-      } else {
-        const chunks = await fetchFileFromChunks(manifestEvent.pubkey, iconAsset.root, effectiveRelays, {
-          maxSizeBytes: DEFAULT_METADATA_FILE_LIMIT,
-          size: iconAsset.size
-        })
-        if (chunks) {
-          const mimeType = iconAsset.mimeType || 'image/png'
-          metadata.icon = { fx: iconAsset.root, url: await chunksToDataUrl(chunks, mimeType) }
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Error fetching app metadata:', error)
   }
+
+  metadata.icon = createIconMetadata(
+    mergeCandidates(directCandidates, htmlCandidates),
+    manifestEvent,
+    indexAsset,
+    htmlDiscovered,
+    discoveredHtmlMetadata
+  )
   return metadata
+}
+
+const htmlDiscoveryByAppId = new Map()
+
+// Refetches one current manifest and expands its HTML icon fallbacks on demand.
+export function discoverHtmlIconFallbacks (appId, cachedIcon, {
+  _getRelaysByPubkey = getRelaysByPubkey,
+  _getBlossomServersByPubkey = getBlossomServersByPubkey,
+  _nostrRelays = nostrRelays
+} = {}) {
+  if (htmlDiscoveryByAppId.has(appId)) return htmlDiscoveryByAppId.get(appId)
+  const request = (async () => {
+    const { dTag, pubkey, kind } = appDecode(appId)
+    const [relaysByAuthor, blossomServersByAuthor] = await Promise.all([
+      _getRelaysByPubkey([pubkey]),
+      _getBlossomServersByPubkey([pubkey])
+    ])
+    const relays = [...new Set([
+      ...(relaysByAuthor[pubkey]?.write || []),
+      ...nappRelays
+    ])]
+    const { result } = await _nostrRelays.getEvents({
+      kinds: [kind],
+      authors: [pubkey],
+      '#d': [dTag]
+    }, relays)
+    const manifestEvent = result.sort((left, right) => right.created_at - left.created_at)[0]
+    if (!manifestEvent) throw new Error('App manifest not found while discovering icon fallbacks')
+    const metadata = await fetchAppMetadata(manifestEvent, relays, {
+      blossomServers: blossomServersByAuthor[pubkey] || [],
+      cachedIcon,
+      forceHtml: true
+    })
+    return metadata.icon
+  })().finally(() => htmlDiscoveryByAppId.delete(appId))
+  htmlDiscoveryByAppId.set(appId, request)
+  return request
 }
 
 export { fetchFileFromChunks, parseIrfsChunk }

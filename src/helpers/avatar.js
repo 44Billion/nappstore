@@ -12,3 +12,13 @@ export const getSvgAvatar = function (seed = getRandomId()) {
     seed
   }).toString()
 }
+
+// Accepts only self-contained images and explicit HTTP(S) image URLs.
+export const isValidAvatarPicture = function (picture) {
+  if (typeof picture !== 'string' || picture.length === 0 || picture.trim() !== picture) return false
+
+  const isDataImage = /^data:image\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*(?:;base64)?,/i.test(picture)
+  const isHttpImageUrl = /^(https?:\/\/)[^\s?#]+\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)(?:[?#].*)?$/i.test(picture)
+
+  return isDataImage || isHttpImageUrl
+}

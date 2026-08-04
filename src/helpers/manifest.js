@@ -5,6 +5,7 @@ const MARKS = new Set(['icon', 'key_art', 'screenshot'])
 export function normalizeManifestPath (value) {
   if (typeof value !== 'string') throw new TypeError('Manifest path must be a string')
   const path = value.startsWith('/') ? value.slice(1) : value
+  // eslint-disable-next-line no-control-regex
   if (!path || path.includes('\\') || /[\u0000-\u001f\u007f]/.test(path)) throw new Error('Unsafe manifest path')
   if (path.split('/').some(segment => !segment || segment === '.' || segment === '..')) throw new Error('Unsafe manifest path')
   return path
@@ -76,8 +77,13 @@ export function getManifestAssets (manifest) {
 
 // Finds the first asset carrying a recognized media mark.
 export function findMarkedManifestAsset (manifest, mark) {
-  if (!MARKS.has(mark)) return null
-  return getManifestAssets(manifest).find(asset => asset.marks.includes(mark)) || null
+  return findMarkedManifestAssets(manifest, mark)[0] || null
+}
+
+// Finds every asset carrying a recognized media mark in manifest order.
+export function findMarkedManifestAssets (manifest, mark) {
+  if (!MARKS.has(mark)) return []
+  return getManifestAssets(manifest).filter(asset => asset.marks.includes(mark))
 }
 
 // Finds the first routed asset accepted by a path predicate.

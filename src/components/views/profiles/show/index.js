@@ -8,7 +8,7 @@ import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import { getAppLauncherUrl } from '#helpers/launcher-url.js'
 import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
-import { setSessionStorageItem } from '#hooks/use-web-storage.js'
+import lru from '#services/lru.js'
 import '#shared/avatar.js'
 import '#shared/app-icon.js'
 
@@ -176,21 +176,29 @@ f('profilesShow', function () {
       const apps = await Promise.all(
         Object.values(appsByDTag).map(async (manifestEvent) => {
           const dTag = manifestEvent.tags.find(t => t[0] === 'd')[1]
-          const metadata = await fetchAppMetadata(manifestEvent, writeRelays, { blossomServers })
+          const encodedApp = appEncode({
+            dTag,
+            pubkey: manifestEvent.pubkey,
+            kind: manifestEvent.kind
+          })
+          const cacheKey = `appById_${encodedApp}_icon`
+          const iconCache = lru.ns('apps')
+          const metadata = await fetchAppMetadata(manifestEvent, writeRelays, {
+            blossomServers,
+            cachedIcon: iconCache.getItem(cacheKey)
+          })
 
-          // Store icon in sessionStorage for app-icon component
+          // Cache the complete fallback chain for app-icon.
           if (metadata.icon) {
             try {
-              setSessionStorageItem(
-                `appById_${dTag}_icon`,
-                { url: metadata.icon.url || metadata.icon }
-              )
+              iconCache.setItem(cacheKey, metadata.icon)
             } catch (err) {
               console.error('Failed to cache icon:', err)
             }
           }
 
           return {
+            id: encodedApp,
             dTag,
             pubkey,
             name: metadata.name || dTag,
@@ -422,7 +430,7 @@ f('profilesShow', function () {
           <f-to-signals
             props=${{
               from: ['app'],
-              app: { id: app.dTag, index: index + 1 },
+              app: { id: app.id, index: index + 1 },
               render: ({ h, props }) => h`
                 <div
                   onclick=${() => store.handleOpenApp(app)}

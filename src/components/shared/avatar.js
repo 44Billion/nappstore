@@ -1,5 +1,5 @@
 import { f, useSignal, useStore, useAsyncComputed } from '#f'
-import { getSvgAvatar } from '#helpers/avatar.js'
+import { getSvgAvatar, isValidAvatarPicture } from '#helpers/avatar.js'
 import '#shared/icons/icon-user-circle.js'
 import '#shared/svg.js'
 import { base62ToBase16 } from 'libp2r2p/base62'
@@ -33,15 +33,12 @@ f('aAvatar', function () {
       let profile
       const cache = track(() => cache$())
       if (cache) profile = track(() => cache.get())
-      if (profile) return profile.picture ?? null
+      if (profile) return isValidAvatarPicture(profile.picture) ? profile.picture : null
 
       profile = await getProfile(pk$()).catch(err => { console.error(err); return {} })
       if (!profile?.picture) return null
 
-      const isDataImage = /^data:image\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*(?:;base64)?,/i.test(profile.picture)
-      const isHttpImageUrl = /^(https?:\/\/)[^\s?#]+\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)(?:[?#].*)?$/i.test(profile.picture)
-      const isRelativeImageUrl = /^(?:\.{0,2}\/)?[^\s?#]+\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)(?:[?#].*)?$/i.test(profile.picture)
-      if (!(isDataImage || isHttpImageUrl || !isRelativeImageUrl)) return null
+      if (!isValidAvatarPicture(profile.picture)) return null
 
       cache.set(profile)
       return profile.picture
