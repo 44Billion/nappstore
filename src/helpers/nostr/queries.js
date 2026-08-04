@@ -26,8 +26,38 @@ async function createFallbackProfile (pubkey, getAvatar) {
       encodeURIComponent(await getAvatar(pubkey))
     }`,
     npub: npubEncode(pubkey),
-    meta: { events: [] }
+    meta: { events: [], generatedPicture: true }
   }
+}
+
+// Applies NIP-01 ordering for replaceable events.
+export function isNewerReplaceableEvent (candidate, current) {
+  if (!candidate) return false
+  if (!current) return true
+  if (candidate.created_at !== current.created_at) return candidate.created_at > current.created_at
+  if (typeof candidate.id !== 'string') return false
+  return typeof current.id !== 'string' || candidate.id < current.id
+}
+
+// Returns the kind 0 event that supplied a normalized profile.
+export function getProfileEvent (profile) {
+  return profile?.meta?.events?.find(event => event?.kind === 0) || null
+}
+
+// Keeps a real newer profile over stale data or a temporary generated fallback.
+export function selectPreferredProfile (cachedProfile, freshProfile) {
+  if (!cachedProfile) return freshProfile || null
+  if (!freshProfile) return cachedProfile
+
+  const cachedEvent = getProfileEvent(cachedProfile)
+  const freshEvent = getProfileEvent(freshProfile)
+  if (cachedEvent && freshEvent) {
+    if (cachedEvent.id && cachedEvent.id === freshEvent.id) return freshProfile
+    return isNewerReplaceableEvent(freshEvent, cachedEvent) ? freshProfile : cachedProfile
+  }
+  if (freshEvent) return freshProfile
+  if (cachedEvent) return cachedProfile
+  return freshProfile
 }
 
 async function loadMissingProfiles (pubkeys, { nostrRelays, getRelaysByPubkey, getAvatar }) {
@@ -44,9 +74,7 @@ async function loadMissingProfiles (pubkeys, { nostrRelays, getRelaysByPubkey, g
 
   const latestByPk = {}
   for (const event of allEvents) {
-    if (!latestByPk[event.pubkey] || event.created_at > latestByPk[event.pubkey].created_at) {
-      latestByPk[event.pubkey] = event
-    }
+    if (isNewerReplaceableEvent(event, latestByPk[event.pubkey])) latestByPk[event.pubkey] = event
   }
 
   await Promise.all(pubkeys.map(async (pubkey) => {
@@ -117,6 +145,16 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
   } catch (_err) {
     eventContent = {}
   }
+  const publishedPicture =
+    [event.tags.find(t => t[0] === 'picture')]
+      .filter(Boolean)
+      .map(t => t[1]?.trim?.())[0] ||
+    eventContent.picture?.trim?.() ||
+    null
+  const picture = publishedPicture || `data:image/svg+xml;charset=utf-8,${
+    encodeURIComponent(await _getSvgAvatar(event.pubkey))
+  }`
+
   return {
     name:
       event.tags
@@ -132,17 +170,11 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
         .map(t => t[1]?.trim?.())[0] ||
       eventContent.about?.trim?.() ||
       '',
-    picture:
-      [event.tags.find(t => t[0] === 'picture')]
-        .filter(Boolean)
-        .map(t => t[1]?.trim?.())[0] ||
-      eventContent.picture?.trim?.() ||
-      `data:image/svg+xml;charset=utf-8,${
-        encodeURIComponent(await _getSvgAvatar(event.pubkey))
-      }`,
+    picture,
     npub: npubEncode(event.pubkey),
     meta: {
-      events: [event]
+      events: [event],
+      generatedPicture: !publishedPicture
     }
   }
 }
@@ -157,9 +189,7 @@ export async function getRelaysByPubkey (pubkeys, { _nostrRelays = nostrRelays }
 
     const latestByPubkey = {}
     for (const event of getEventsResult) {
-      if (!latestByPubkey[event.pubkey] || event.created_at > latestByPubkey[event.pubkey].created_at) {
-        latestByPubkey[event.pubkey] = event
-      }
+      if (isNewerReplaceableEvent(event, latestByPubkey[event.pubkey])) latestByPubkey[event.pubkey] = event
     }
 
     for (const pubkey of missingPubkeys) {
@@ -202,9 +232,7 @@ export async function getBlossomServersByPubkey (pubkeys, { _nostrRelays = nostr
 
     const latestByPubkey = {}
     for (const event of allEvents) {
-      if (!latestByPubkey[event.pubkey] || event.created_at > latestByPubkey[event.pubkey].created_at) {
-        latestByPubkey[event.pubkey] = event
-      }
+      if (isNewerReplaceableEvent(event, latestByPubkey[event.pubkey])) latestByPubkey[event.pubkey] = event
     }
 
     for (const pubkey of missingPubkeys) {

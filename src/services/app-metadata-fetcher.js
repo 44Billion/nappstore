@@ -16,6 +16,7 @@ import {
   getManifestAssets,
   getManifestMetadata
 } from '#helpers/manifest.js'
+import { isRenderableAppIconUrl } from '#helpers/app-icon.js'
 
 const CHUNK_BYTES = 51000
 const QUERY_BATCH_SIZE = 100
@@ -332,7 +333,7 @@ function normalizeCachedIconCandidates (icon) {
   const candidates = [icon, ...(Array.isArray(icon.candidates) ? icon.candidates : [])]
   const seen = new Set()
   return candidates.flatMap(candidate => {
-    if (typeof candidate?.url !== 'string' || !candidate.url || seen.has(candidate.url)) return []
+    if (!isRenderableAppIconUrl(candidate?.url) || seen.has(candidate.url)) return []
     seen.add(candidate.url)
     return [{
       fx: typeof candidate.fx === 'string' ? candidate.fx : null,
@@ -345,7 +346,7 @@ function normalizeCachedIconCandidates (icon) {
 function mergeCandidates (...groups) {
   const seen = new Set()
   return groups.flat().filter(candidate => {
-    if (!candidate?.url || seen.has(candidate.url)) return false
+    if (!isRenderableAppIconUrl(candidate?.url) || seen.has(candidate.url)) return false
     seen.add(candidate.url)
     return true
   })

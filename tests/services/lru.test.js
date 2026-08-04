@@ -293,6 +293,65 @@ describe('LRU Cache', () => {
       assert.equal(testLru.getItem('key3'), 'value3')
       assert.equal(testLru.getItem('key4'), 'value4')
     })
+
+    it('evicts least-recent items and retries after quota exhaustion', () => {
+      const prefix = '_44bLru_quota-recovery_item_'
+      const quotaSetter = (key, value) => {
+        if (value === undefined) return localStorageMock.removeItem(key)
+        const serialized = JSON.stringify(value)
+        let used = serialized.length
+        for (let index = 0; index < localStorageMock.length; index++) {
+          const storedKey = localStorageMock.key(index)
+          if (storedKey?.startsWith(prefix) && storedKey !== key) {
+            used += localStorageMock.getItem(storedKey).length
+          }
+        }
+        if (used > 20) {
+          const error = new Error('quota exceeded')
+          error.name = 'QuotaExceededError'
+          throw error
+        }
+        localStorageMock.setItem(key, serialized)
+      }
+      const cache = lru.ns('quota-recovery', {
+        maxItems: 10,
+        setLocalStorageItem: quotaSetter,
+        enableAutoCleanup: false
+      })
+
+      cache.setItem('one', '12345678')
+      cache.setItem('two', '12345678')
+      cache.setItem('three', '12345678')
+
+      assert.equal(cache.getItem('one'), undefined)
+      assert.equal(cache.getItem('two'), '12345678')
+      assert.equal(cache.getItem('three'), '12345678')
+    })
+
+    it('does not retain an entry that remains too large after eviction', (t) => {
+      const prefix = '_44bLru_quota-oversized_item_'
+      const quotaSetter = (key, value) => {
+        if (value === undefined) return localStorageMock.removeItem(key)
+        const serialized = JSON.stringify(value)
+        if (key.startsWith(prefix) && serialized.length > 20) {
+          const error = new Error('quota exceeded')
+          error.name = 'QuotaExceededError'
+          throw error
+        }
+        localStorageMock.setItem(key, serialized)
+      }
+      const consoleError = t.mock.method(console, 'error', () => {})
+      const cache = lru.ns('quota-oversized', {
+        maxItems: 10,
+        setLocalStorageItem: quotaSetter,
+        enableAutoCleanup: false
+      })
+
+      assert.equal(cache.setItem('huge', 'x'.repeat(100)), undefined)
+      assert.equal(cache.getItem('huge'), undefined)
+      assert.equal(cache.keys().includes('huge'), false)
+      assert.equal(consoleError.mock.callCount(), 1)
+    })
   })
 
   describe('Storage API Compatibility', () => {

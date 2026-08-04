@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { eventToProfile, getProfiles } from '#helpers/nostr/queries.js'
+import { eventToProfile, getProfiles, selectPreferredProfile } from '#helpers/nostr/queries.js'
 
 describe('Nostr profiles', () => {
   it('does not generate a fallback when the profile has a picture', async () => {
@@ -83,5 +83,53 @@ describe('Nostr profiles', () => {
     assert.equal(avatarCalls, 1)
     assert.equal(first[pubkey], second[pubkey])
     assert.equal(second[pubkey], cached[pubkey])
+  })
+
+  it('selects the newest profile across both relays with the NIP-01 tie break', async () => {
+    const pubkey = 'd'.repeat(64)
+    const eventsByRelay = {
+      'wss://one.test': [
+        { id: 'f'.repeat(64), kind: 0, pubkey, created_at: 10, tags: [], content: '{"name":"Old"}' },
+        { id: 'b'.repeat(64), kind: 0, pubkey, created_at: 20, tags: [], content: '{"name":"Tie loser"}' }
+      ],
+      'wss://two.test': [
+        { id: 'a'.repeat(64), kind: 0, pubkey, created_at: 20, tags: [], content: '{"name":"Newest"}' }
+      ]
+    }
+
+    const profiles = await getProfiles([pubkey], {
+      _nostrRelays: {
+        async getEvents (_filter, relays) {
+          return { result: eventsByRelay[relays[0]] }
+        }
+      },
+      async _getRelaysByPubkey () {
+        return { [pubkey]: { write: Object.keys(eventsByRelay) } }
+      },
+      _getSvgAvatar: () => '<svg />'
+    })
+
+    assert.equal(profiles[pubkey].name, 'Newest')
+    assert.equal(profiles[pubkey].meta.events[0].id, 'a'.repeat(64))
+  })
+
+  it('preserves a real cached profile when a refresh only produces a fallback', () => {
+    const cached = {
+      picture: 'https://cdn.test/cached',
+      meta: { events: [{ id: 'a'.repeat(64), kind: 0, created_at: 10 }] }
+    }
+    const fallback = {
+      picture: 'data:image/svg+xml,fallback',
+      meta: { events: [], generatedPicture: true }
+    }
+
+    assert.equal(selectPreferredProfile(cached, fallback), cached)
+  })
+
+  it('refreshes derived metadata when both profiles came from the same event', () => {
+    const event = { id: 'a'.repeat(64), kind: 0, created_at: 10 }
+    const cached = { picture: 'data:image/svg+xml,legacy', meta: { events: [event] } }
+    const fresh = { picture: 'data:image/svg+xml,current', meta: { events: [event], generatedPicture: true } }
+    assert.equal(selectPreferredProfile(cached, fresh), fresh)
   })
 })

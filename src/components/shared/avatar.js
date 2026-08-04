@@ -1,18 +1,18 @@
 import { f, useSignal, useStore, useAsyncComputed } from '#f'
-import { getSvgAvatar, isValidAvatarPicture } from '#helpers/avatar.js'
+import { getSvgAvatar, isCacheableAvatarProfile, isValidAvatarPicture } from '#helpers/avatar.js'
 import '#shared/icons/icon-user-circle.js'
 import '#shared/svg.js'
-import { base62ToBase16 } from 'libp2r2p/base62'
 import { cssVars } from '#assets/styles/theme.js'
-import { getProfile } from '#helpers/nostr/queries.js'
+import { getProfile, selectPreferredProfile } from '#helpers/nostr/queries.js'
 import useWebStorage from '#hooks/use-web-storage.js'
 import lru from '#services/lru.js'
 
 // wrap it with a div setting width/height, border-radius and background-color
-f('aAvatar', function () {
-  const pk$ = useSignal(this.props.pk$ ?? this.props.pk)
+f('a-avatar', ({ h, props }) => {
+  const fallbackPk$ = useSignal(props.pk)
+  const pk$ = props.pk$ ?? fallbackPk$
   const storage = useWebStorage(localStorage)
-  const cache$ = useSignal(this.props.profileCache$ ?? this.props.profileCache ?? {
+  const fallbackCache$ = useSignal(props.profileCache ?? {
     get () {
       return lru.ns('accounts').getReactiveItem(
         `accountByUserPk_${pk$() ?? ''}_profile`,
@@ -24,29 +24,82 @@ f('aAvatar', function () {
         `accountByUserPk_${pk$() ?? ''}_profile`,
         profile
       )
+    },
+    remove () {
+      return lru.ns('accounts').removeItem(`accountByUserPk_${pk$() ?? ''}_profile`)
     }
   })
-  const store = useStore({
+  const cache$ = props.profileCache$ ?? fallbackCache$
+  const getCachedProfile = () => cache$()?.get?.() || null
+  const cacheProfile = profile => cache$()?.set?.(profile)
+  const removeCachedProfile = () => cache$()?.remove?.()
+  const store = useStore(() => ({
     pk$,
-    cache$,
-    picture$: useAsyncComputed(async ({ track }) => {
-      let profile
-      const cache = track(() => cache$())
-      if (cache) profile = track(() => cache.get())
-      if (profile) return isValidAvatarPicture(profile.picture) ? profile.picture : null
+    loadedPicture$: null,
+    rejectedPicture$: null,
+    providedProfile$ () {
+      return props.profile$?.() ?? props.profile ?? null
+    },
+    cachedProfile$ () {
+      return getCachedProfile()
+    },
+    refreshedProfile$: useAsyncComputed(async ({ track }) => {
+      const pk = track(() => pk$())
+      const providedProfile = track(() => props.profile$?.() ?? props.profile ?? null)
+      if (!pk) return providedProfile
 
-      profile = await getProfile(pk$()).catch(err => { console.error(err); return {} })
-      if (!profile?.picture) return null
+      const queriedProfile = await getProfile(pk).catch(error => {
+        console.error(error)
+        return null
+      })
+      const freshProfile = selectPreferredProfile(providedProfile, queriedProfile)
 
-      if (!isValidAvatarPicture(profile.picture)) return null
-
-      cache.set(profile)
-      return profile.picture
+      const cachedProfile = getCachedProfile()
+      const preferredProfile = selectPreferredProfile(cachedProfile, freshProfile)
+      if (preferredProfile === freshProfile && isCacheableAvatarProfile(freshProfile)) {
+        cacheProfile(freshProfile)
+      } else if (preferredProfile === freshProfile && cachedProfile) {
+        removeCachedProfile()
+      }
+      return preferredProfile
     }),
+    profile$ () {
+      return selectPreferredProfile(
+        selectPreferredProfile(this.cachedProfile$(), this.providedProfile$()),
+        this.refreshedProfile$()
+      )
+    },
+    picture$ () {
+      const picture = this.profile$()?.picture
+      return isValidAvatarPicture(picture) ? picture : null
+    },
+    pictureToRender$ () {
+      const picture = this.picture$()
+      const rejected = this.rejectedPicture$()
+      return picture && !(rejected?.pk === this.pk$() && rejected.picture === picture)
+        ? picture
+        : null
+    },
+    isPictureLoaded$ () {
+      const picture = this.pictureToRender$()
+      const loaded = this.loadedPicture$()
+      return !!picture && loaded?.pk === this.pk$() && loaded.picture === picture
+    },
+    markPictureLoaded (event) {
+      const picture = this.pictureToRender$()
+      if (!picture || event.currentTarget.getAttribute('src') !== picture) return
+      this.loadedPicture$({ pk: this.pk$(), picture })
+    },
+    rejectPicture (event) {
+      const picture = this.pictureToRender$()
+      if (!picture || event.currentTarget.getAttribute('src') !== picture) return
+      this.loadedPicture$(null)
+      this.rejectedPicture$({ pk: this.pk$(), picture })
+    },
     svg$ () {
       const seed = pk$()
       if (!seed) return
-      return getSvgAvatar(base62ToBase16(seed, { mode: 'integer', byteLength: 32 }))
+      return getSvgAvatar(seed)
     },
     svgStyle$: () => {
       return [
@@ -54,13 +107,13 @@ f('aAvatar', function () {
           width: 100%;
           height: 100%;
         }`,
-        this.props.style$?.() || this.props.style || ''
+        props.style$?.() || props.style || ''
       ]
     }
-  })
+  }))
 
-  if (store.picture$.promise$().isLoading) {
-    return this.h`<div
+  if (!store.profile$() && store.refreshedProfile$.promise$().isLoading) {
+    return h`<div
       style=${`
         width: 100%;
         height: 100%;
@@ -86,21 +139,57 @@ f('aAvatar', function () {
     </div>`
   }
 
-  if (store.picture$()) {
-    return this.h`<img
-      src=${store.picture$()}
-      alt='User avatar'
-      style=${`
+  const picture = store.pictureToRender$()
+  if (picture) {
+    const isPictureLoaded = store.isPictureLoaded$()
+    return h`
+      <style>
+        @keyframes avatarPulse {
+          0% { opacity: 0.1; }
+          50% { opacity: 0.5; }
+          100% { opacity: 0.1; }
+        }
+      </style>
+      <span style=${`
+        display: block;
+        position: relative;
         width: 100%;
         height: 100%;
-        object-fit: cover;
-      `}
-    />`
+        overflow: hidden;
+      `}>
+        <span
+          aria-hidden='true'
+          style=${`
+            position: absolute;
+            inset: 0;
+            background-color: ${cssVars.colors.bgAvatarLoading};
+            visibility: ${isPictureLoaded ? 'hidden' : 'visible'};
+            animation: ${isPictureLoaded ? 'none' : 'avatarPulse 2s cubic-bezier(.4,0,.6,1) infinite'};
+          `}
+        />
+        <img
+          src=${picture}
+          loading='lazy'
+          decoding='async'
+          onload=${store.markPictureLoaded}
+          onerror=${store.rejectPicture}
+          alt='User avatar'
+          style=${`
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            visibility: ${isPictureLoaded ? 'visible' : 'hidden'};
+          `}
+        />
+      </span>
+    `
   }
 
   if (!store.pk$() || !store.svg$()) {
-    return this.h`<icon-user-circle props=${this.props} />`
+    return h`<icon-user-circle props=${props} />`
   }
 
-  return this.h`<a-svg props=${{ ...this.props, style$: store.svgStyle$, svg: store.svg$() }} />`
+  return h`<a-svg props=${{ ...props, style$: store.svgStyle$, svg: store.svg$() }} />`
 })

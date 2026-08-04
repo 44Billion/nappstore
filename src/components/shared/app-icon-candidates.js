@@ -1,3 +1,5 @@
+import { isRenderableAppIconUrl } from '#helpers/app-icon.js'
+
 // Normalizes current and legacy cached icon shapes into an ordered URL list.
 export function normalizeAppIconCandidates (icon) {
   if (!icon || typeof icon !== 'object') return []
@@ -5,8 +7,8 @@ export function normalizeAppIconCandidates (icon) {
   const candidates = [icon, ...(Array.isArray(icon.candidates) ? icon.candidates : [])]
   const seenUrls = new Set()
   return candidates.flatMap(candidate => {
-    if (!candidate || typeof candidate.url !== 'string' || !candidate.url.trim()) return []
-    const url = candidate.url.trim()
+    if (!candidate || !isRenderableAppIconUrl(candidate.url)) return []
+    const url = candidate.url
     if (seenUrls.has(url)) return []
     seenUrls.add(url)
     return [{

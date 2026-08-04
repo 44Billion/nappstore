@@ -351,8 +351,9 @@ f('nappsIndex', function () {
       return this.h({ key })`
           <f-to-signals
             props=${{
-              from: ['app'],
+              from: ['app', 'profile'],
               app: { id: app.id, index: index + 1, fx: app.iconFx },
+              profile,
               render: ({ h, props }) => h`
                 <div
                   data-app-id=${app.id}
@@ -458,6 +459,7 @@ f('nappsIndex', function () {
                         <a-avatar
                           props=${{
                             pk: app.pubkey,
+                            profile$: props.profile$,
                             style: `svg {
                               width: 100%;
                               height: 100%;

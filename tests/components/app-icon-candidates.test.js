@@ -31,6 +31,23 @@ describe('app icon candidates', () => {
     assert.deepEqual(normalizeAppIconCandidates(null), [])
   })
 
+  it('accepts extensionless HTTP icons and rejects unsafe cached sources', () => {
+    assert.deepEqual(normalizeAppIconCandidates({
+      url: 'https://cdn.test/content-hash',
+      candidates: [
+        { url: 'data:image/svg+xml,%3Csvg%3E' },
+        { url: '/relative/icon.png' },
+        { url: 'https://user:secret@cdn.test/icon.png' },
+        { url: 'javascript:alert(1)' },
+        { url: 'data:text/html,not-an-image' },
+        { url: ' https://cdn.test/spaced.png' }
+      ]
+    }), [
+      { fx: null, url: 'https://cdn.test/content-hash', source: 'manifest' },
+      { fx: null, url: 'data:image/svg+xml,%3Csvg%3E', source: 'manifest' }
+    ])
+  })
+
   it('advances past rejected URLs and finishes an unsuccessful discovery attempt', () => {
     const icon = {
       url: 'https://one.test/icon',

@@ -11,12 +11,24 @@ import {
   fetchFileFromChunks,
   parseIrfsChunk
 } from '#services/app-metadata-fetcher.js'
+import { resolveExternalImageUrl } from '#services/app-metadata.js'
 
 function sha256Hex (bytes) {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
 afterEach(() => mock.restoreAll())
+
+describe('external app icon URLs', () => {
+  it('resolves safe sources without relying on file extensions', () => {
+    assert.equal(resolveExternalImageUrl('https://cdn.test/content-hash'), 'https://cdn.test/content-hash')
+    assert.equal(resolveExternalImageUrl('icon.png', 'https://cdn.test/assets/'), 'https://cdn.test/assets/icon.png')
+    assert.equal(resolveExternalImageUrl('/icon.png'), null)
+    assert.equal(resolveExternalImageUrl('https://user:secret@cdn.test/icon.png'), null)
+    assert.equal(resolveExternalImageUrl('javascript:alert(1)'), null)
+    assert.equal(resolveExternalImageUrl('data:text/html,not-an-image'), null)
+  })
+})
 
 describe('app metadata fetcher v2', () => {
   it('validates an IRFS chunk proof and rejects content mutation', async () => {

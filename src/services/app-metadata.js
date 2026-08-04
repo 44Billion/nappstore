@@ -1,3 +1,5 @@
+import { isRenderableAppIconUrl } from '#helpers/app-icon.js'
+
 const IMAGE_EXTENSIONS = /\.(?:ico|svg|webp|png|jpe?g|gif|avif)(?:[?#].*)?$/i
 
 // Decodes the character references commonly used in metadata attributes.
@@ -166,12 +168,13 @@ export function resolveAppPath (reference, basePath = 'index.html', baseHref) {
 // Returns a directly renderable external image URL, if safe.
 export function resolveExternalImageUrl (reference, baseHref) {
   const value = typeof reference === 'string' ? reference.trim() : ''
-  if (/^data:image\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(value)) return value
+  if (!value || /\s/.test(value)) return null
+  if (value.startsWith('data:')) return isRenderableAppIconUrl(value) ? value : null
   const hasRemoteBase = typeof baseHref === 'string' && /^(?:https?:)?\/\//i.test(baseHref.trim())
   if (!/^(?:https?:)?\/\//i.test(value) && !hasRemoteBase) return null
   try {
     const url = new URL(value, baseHref || 'https://napp.invalid/')
-    return ['http:', 'https:'].includes(url.protocol) ? url.href : null
+    return isRenderableAppIconUrl(url.href) ? url.href : null
   } catch (_) {
     return null
   }

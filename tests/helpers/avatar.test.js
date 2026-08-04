@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { getSvgAvatar, isValidAvatarPicture } from '#helpers/avatar.js'
+import { getSvgAvatar, isCacheableAvatarProfile, isValidAvatarPicture } from '#helpers/avatar.js'
 
 function normalizeRandomIds (svg) {
   const suffix = svg.match(/id="[^"]+-([a-f0-9]{6})"/)?.[1]
@@ -29,21 +29,54 @@ describe('local avatars', () => {
     assert.notEqual(first, second)
     assert.equal(normalizeRandomIds(first), normalizeRandomIds(second))
   })
+
+  it('uses a hexadecimal Nostr pubkey directly as a DiceBear seed', () => {
+    const svg = getSvgAvatar('f7922a0adb3fa4dda5eecaa62f6f7ee6159f7f55e08036686c68e08382c34788')
+    assert.match(svg, /^<svg /)
+  })
 })
 
 describe('avatar picture validation', () => {
   it('accepts supported data and HTTP image sources', () => {
     assert.equal(isValidAvatarPicture('data:image/svg+xml,%3Csvg%3E'), true)
     assert.equal(isValidAvatarPicture('https://example.test/avatar.webp?size=64'), true)
+    assert.equal(isValidAvatarPicture('https://example.test/64-character-content-hash'), true)
   })
 
-  it('rejects relative, non-image and unsafe-looking values', () => {
+  it('rejects relative and unsafe-looking values', () => {
     assert.equal(isValidAvatarPicture('/images/avatar.png'), false)
     assert.equal(isValidAvatarPicture('../images/avatar.svg#face'), false)
     assert.equal(isValidAvatarPicture('avatar.png'), false)
     assert.equal(isValidAvatarPicture('javascript:alert(1)'), false)
-    assert.equal(isValidAvatarPicture('https://example.test/profile'), false)
+    assert.equal(isValidAvatarPicture('https://user:secret@example.test/avatar.png'), false)
     assert.equal(isValidAvatarPicture(' avatar.png'), false)
     assert.equal(isValidAvatarPicture({ src: 'avatar.png' }), false)
+  })
+})
+
+describe('persistent avatar profile limits', () => {
+  const event = { id: 'a'.repeat(64), kind: 0, created_at: 1 }
+
+  it('keeps ordinary profiles but not locally generated fallbacks', () => {
+    assert.equal(isCacheableAvatarProfile({
+      picture: 'https://cdn.test/content-hash',
+      meta: { events: [event], generatedPicture: false }
+    }), true)
+    assert.equal(isCacheableAvatarProfile({
+      picture: 'data:image/svg+xml,fallback',
+      meta: { events: [], generatedPicture: true }
+    }), false)
+  })
+
+  it('rejects oversized embedded pictures and profiles', () => {
+    assert.equal(isCacheableAvatarProfile({
+      picture: `data:image/png;base64,${'a'.repeat(16 * 1024)}`,
+      meta: { events: [event], generatedPicture: false }
+    }), false)
+    assert.equal(isCacheableAvatarProfile({
+      picture: 'https://cdn.test/avatar',
+      about: 'a'.repeat(32 * 1024),
+      meta: { events: [event], generatedPicture: false }
+    }), false)
   })
 })

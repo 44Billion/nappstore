@@ -1,17 +1,12 @@
 import { maybeUnref } from '#helpers/timer.js'
+import { setLocalStorageItem as defaultSetLocalStorageItem } from '#helpers/web-storage.js'
 
-let memo
-async function defaultSetLocalStorageItem (...args) {
-  memo ??= await (async () => {
-    const { setLocalStorageItem } = await import('#components/hooks/use-web-storage.js')
-    return (key, value) => {
-      if (key.endsWith('$')) {
-        throw new Error('Do not append "$" to the key when using setLocalStorageItem')
-      }
-      setLocalStorageItem(key, value)
-    }
-  })()
-  return memo(...args)
+// Recognizes quota errors across current and legacy browser implementations.
+function isQuotaExceededError (error) {
+  return error?.name === 'QuotaExceededError' ||
+    error?.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    error?.code === 22 ||
+    error?.code === 1014
 }
 
 // Time unit constants for duration parsing
@@ -123,11 +118,42 @@ function createLRUInstance (namespace = '', options = {}) {
     clearTimeout(persistTimeout)
     persistTimeout = maybeUnref(setTimeout(() => {
       try {
-        setLocalStorageItem(mruKeysKey, mruKeys)
+        setWithQuotaRecovery(mruKeysKey, mruKeys)
       } catch (err) {
         console.error(`Failed to persist MRU keys for namespace ${namespace}:`, err)
       }
     }, 1000))
+  }
+
+  // Removes one cached item and its bookkeeping from this namespace.
+  function removeStoredItem (key) {
+    localStorage.removeItem(itemPrefix + key)
+    const namespacedKey = namespace ? `${namespace}${key}` : key
+    localStorage.removeItem(expirationPrefix + namespacedKey)
+    const index = mruKeys.indexOf(key)
+    if (index !== -1) mruKeys.splice(index, 1)
+  }
+
+  // Evicts the least-recent entry except the item currently being written.
+  function evictLeastRecent (protectedKey) {
+    for (let index = mruKeys.length - 1; index >= 0; index--) {
+      const key = mruKeys[index]
+      if (key === protectedKey) continue
+      removeStoredItem(key)
+      return true
+    }
+    return false
+  }
+
+  // Retries a write while progressively freeing this namespace's oldest entries.
+  function setWithQuotaRecovery (storageKey, value, protectedKey) {
+    while (true) {
+      try {
+        return setLocalStorageItem(storageKey, value)
+      } catch (error) {
+        if (!isQuotaExceededError(error) || !evictLeastRecent(protectedKey)) throw error
+      }
+    }
   }
 
   // Function to update MRU keys list efficiently
@@ -142,20 +168,7 @@ function createLRUInstance (namespace = '', options = {}) {
     mruKeys.unshift(key)
 
     // Limit to maxKeys
-    if (mruKeys.length > maxKeys) {
-      // Get the keys to evict (the ones at the end)
-      const keysToEvict = mruKeys.slice(maxKeys)
-
-      // Remove evicted items from localStorage immediately
-      for (const evictedKey of keysToEvict) {
-        localStorage.removeItem(itemPrefix + evictedKey)
-        const namespacedKey = namespace ? `${namespace}${evictedKey}` : evictedKey
-        localStorage.removeItem(expirationPrefix + namespacedKey)
-      }
-
-      // Trim the MRU keys list
-      mruKeys = mruKeys.slice(0, maxKeys)
-    }
+    while (mruKeys.length > maxKeys) removeStoredItem(mruKeys[mruKeys.length - 1])
 
     // Schedule persisting
     persistMruKeys()
@@ -259,11 +272,8 @@ function createLRUInstance (namespace = '', options = {}) {
     set maxKeys (value) {
       maxKeys = value || 300
 
-      // Trim the MRU keys if needed
-      if (mruKeys.length > maxKeys) {
-        mruKeys = mruKeys.slice(0, maxKeys)
-        persistMruKeys()
-      }
+      while (mruKeys.length > maxKeys) removeStoredItem(mruKeys[mruKeys.length - 1])
+      persistMruKeys()
     },
 
     // Get the default duration
@@ -314,13 +324,9 @@ function createLRUInstance (namespace = '', options = {}) {
 
     // Set an item in cache
     setItem (key, value, expiration) {
+      const previousIndex = mruKeys.indexOf(key)
+      const hadItem = localStorage.getItem(itemPrefix + key) !== null
       try {
-        // Update MRU list
-        updateMruKeys(key)
-
-        // Store the value
-        setLocalStorageItem(itemPrefix + key, value)
-
         // Determine expiration time
         let expirationTime
 
@@ -342,10 +348,14 @@ function createLRUInstance (namespace = '', options = {}) {
           expirationTime = Date.now() + defaultDuration
         }
 
-        // Store expiration if determined
+        updateMruKeys(key)
+        setWithQuotaRecovery(itemPrefix + key, value, key)
+
+        const namespacedKey = namespace ? `${namespace}${key}` : key
         if (expirationTime !== undefined) {
-          const namespacedKey = namespace ? `${namespace}${key}` : key
-          setLocalStorageItem(expirationPrefix + namespacedKey, expirationTime)
+          setWithQuotaRecovery(expirationPrefix + namespacedKey, expirationTime, key)
+        } else {
+          setLocalStorageItem(expirationPrefix + namespacedKey, undefined)
         }
 
         // Schedule pruning
@@ -353,6 +363,12 @@ function createLRUInstance (namespace = '', options = {}) {
 
         return value
       } catch (err) {
+        const currentIndex = mruKeys.indexOf(key)
+        if (currentIndex !== -1) mruKeys.splice(currentIndex, 1)
+        if (hadItem && localStorage.getItem(itemPrefix + key) !== null) {
+          mruKeys.splice(Math.min(previousIndex < 0 ? mruKeys.length : previousIndex, mruKeys.length), 0, key)
+        }
+        persistMruKeys()
         console.error(`Failed to set item ${key}:`, err)
         return undefined
       }
@@ -361,15 +377,12 @@ function createLRUInstance (namespace = '', options = {}) {
     // Remove an item from cache
     removeItem (key) {
       try {
-        // Update MRU list
-        updateMruKeys(key)
-
-        // Delete the item by setting it to undefined
         setLocalStorageItem(itemPrefix + key, undefined)
-
-        // Also remove expiration if it exists
         const namespacedKey = namespace ? `${namespace}${key}` : key
         setLocalStorageItem(expirationPrefix + namespacedKey, undefined)
+        const index = mruKeys.indexOf(key)
+        if (index !== -1) mruKeys.splice(index, 1)
+        persistMruKeys()
 
         return true
       } catch (err) {
