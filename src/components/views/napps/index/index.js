@@ -170,40 +170,44 @@ f('nappsIndex', function () {
         name: metadata.name || dTag,
         description: metadata.description || metadata.summary || 'No description',
         iconFx: icon?.root || null,
+        iconResolutionPending: true,
         uploadedAt: manifestEvent.created_at * 1000
       }
     },
 
     // Background task: resolves HTML/favicon fallbacks and fetches profiles.
     async fetchMetadataAndProfiles (manifestEvents) {
+      const pendingAppIds = new Set(
+        manifestEvents
+          .map(manifestEvent => this.createAppFromManifestEvent(manifestEvent)?.id)
+          .filter(Boolean)
+      )
       try {
         const authorPubkeys = [...new Set(manifestEvents.map(e => e.pubkey))]
+        const profilesPromise = this.loadProfiles(authorPubkeys)
 
         const [relaysByAuthor, blossomServersByAuthor] = await Promise.all([
           getRelaysByPubkey(authorPubkeys),
-          getBlossomServersByPubkey(authorPubkeys),
-          this.loadProfiles(authorPubkeys)
+          getBlossomServersByPubkey(authorPubkeys)
         ])
 
         const iconCache = lru.ns('apps')
-        const metadataByAppId = new Map()
 
         await Promise.all(
           manifestEvents.map(async (manifestEvent) => {
+            const app = this.createAppFromManifestEvent(manifestEvent)
+            if (!app) return
+            let metadata
             try {
-              const app = this.createAppFromManifestEvent(manifestEvent)
-              if (!app) return
-
               const relays = [...new Set([
                 ...(relaysByAuthor[manifestEvent.pubkey]?.write || []),
                 ...nappRelays
               ])]
               const cacheKey = `appById_${app.id}_icon`
-              const metadata = await fetchAppMetadata(manifestEvent, relays, {
+              metadata = await fetchAppMetadata(manifestEvent, relays, {
                 blossomServers: blossomServersByAuthor[manifestEvent.pubkey] || [],
                 cachedIcon: iconCache.getItem(cacheKey)
               })
-              metadataByAppId.set(app.id, metadata)
 
               if (metadata.icon) {
                 try {
@@ -214,24 +218,29 @@ f('nappsIndex', function () {
               }
             } catch (err) {
               console.error('Failed to fetch app metadata:', err)
+            } finally {
+              this.apps$(apps => apps.map(current => current.id === app.id
+                ? {
+                    ...current,
+                    name: metadata?.name || current.name,
+                    description: metadata?.description || current.description,
+                    iconFx: metadata?.icon?.fx || current.iconFx,
+                    iconResolutionPending: false
+                  }
+                : current
+              ))
             }
           })
         )
-
-        if (metadataByAppId.size > 0) {
-          this.apps$(apps => apps.map(app => {
-            const metadata = metadataByAppId.get(app.id)
-            if (!metadata) return app
-            return {
-              ...app,
-              name: metadata.name || app.name,
-              description: metadata.description || app.description,
-              iconFx: metadata.icon?.fx || app.iconFx
-            }
-          }))
-        }
+        await profilesPromise
       } catch (err) {
         console.error('Failed to fetch app metadata and profiles:', err)
+      } finally {
+        this.apps$(apps => apps.map(app =>
+          pendingAppIds.has(app.id) && app.iconResolutionPending
+            ? { ...app, iconResolutionPending: false }
+            : app
+        ))
       }
     },
 
@@ -378,7 +387,12 @@ f('nappsIndex', function () {
           <f-to-signals
             props=${{
               from: ['app', 'profile'],
-              app: { id: app.id, index: index + 1, fx: app.iconFx },
+              app: {
+                id: app.id,
+                index: index + 1,
+                fx: app.iconFx,
+                iconResolutionPending: app.iconResolutionPending
+              },
               profile,
               render: ({ h, props }) => h`
                 <div

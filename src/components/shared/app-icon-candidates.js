@@ -31,3 +31,46 @@ export function getAppIconCandidateState (icon, rejectedUrls, { discoveryAttempt
     exhausted: index < 0 && (htmlDiscovered || discoveryAttempted)
   }
 }
+
+// Keeps a confirmed image selected while refreshed candidates still represent it.
+export function reconcileAppIconCandidates (candidates, displayedIcon, rejectedUrls) {
+  const index = candidates.findIndex(candidate => !rejectedUrls.has(candidate.url))
+  if (!displayedIcon || rejectedUrls.has(displayedIcon.url)) {
+    return { candidates, index: index < 0 ? candidates.length : index }
+  }
+
+  const exactIndex = candidates.findIndex(candidate => candidate.url === displayedIcon.url)
+  if (exactIndex >= 0) return { candidates, index: exactIndex }
+
+  if (displayedIcon.fx && candidates.some(candidate => candidate.fx === displayedIcon.fx)) {
+    return { candidates: [displayedIcon, ...candidates], index: 0 }
+  }
+
+  return { candidates, index: index < 0 ? candidates.length : index }
+}
+
+// Describes the two image layers without hiding a confirmed image during preload.
+export function getAppIconLayerState (displayedIcon, candidateIcon) {
+  const hasDisplayedIcon = !!displayedIcon
+  const isCandidateDisplayed = displayedIcon?.url === candidateIcon?.url
+  return {
+    isShimmerVisible: !hasDisplayedIcon,
+    isDisplayedLayerVisible: hasDisplayedIcon && !isCandidateDisplayed,
+    isCandidateLayerVisible: isCandidateDisplayed
+  }
+}
+
+// Distinguishes an unresolved icon from a confirmed numeric fallback.
+export function isAppIconResolutionPending ({
+  hasReadIconState,
+  consumerResolutionPending,
+  isDiscovering,
+  appFx,
+  currentIcon,
+  exhausted
+}) {
+  return !hasReadIconState ||
+    consumerResolutionPending === true ||
+    isDiscovering ||
+    (consumerResolutionPending === undefined && !!appFx && !currentIcon && !exhausted)
+}

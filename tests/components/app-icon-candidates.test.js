@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  getAppIconLayerState,
   getAppIconCandidateState,
-  normalizeAppIconCandidates
+  isAppIconResolutionPending,
+  normalizeAppIconCandidates,
+  reconcileAppIconCandidates
 } from '#shared/app-icon-candidates.js'
 
 describe('app icon candidates', () => {
@@ -72,5 +75,92 @@ describe('app icon candidates', () => {
     rejected.add('https://two.test/icon')
     assert.equal(getAppIconCandidateState(icon, rejected).exhausted, false)
     assert.equal(getAppIconCandidateState(icon, rejected, { discoveryAttempted: true }).exhausted, true)
+  })
+
+  it('keeps an already loaded URL selected when refreshed candidates are reordered', () => {
+    const displayed = { fx: 'same-root', url: 'https://loaded.test/icon' }
+    const candidates = [
+      { fx: 'same-root', url: 'https://new-primary.test/icon' },
+      displayed
+    ]
+
+    assert.deepEqual(reconcileAppIconCandidates(candidates, displayed, new Set()), {
+      candidates,
+      index: 1
+    })
+  })
+
+  it('keeps a loaded root without switching between equivalent servers', () => {
+    const displayed = { fx: 'same-root', url: 'https://loaded.test/icon' }
+    const candidates = [{ fx: 'same-root', url: 'https://new.test/icon' }]
+
+    assert.deepEqual(reconcileAppIconCandidates(candidates, displayed, new Set()), {
+      candidates: [displayed, ...candidates],
+      index: 0
+    })
+  })
+
+  it('selects a genuinely different candidate while retaining the displayed image separately', () => {
+    const displayed = { fx: 'old-root', url: 'https://loaded.test/icon' }
+    const candidates = [{ fx: 'new-root', url: 'https://new.test/icon' }]
+
+    assert.deepEqual(reconcileAppIconCandidates(candidates, displayed, new Set()), {
+      candidates,
+      index: 0
+    })
+  })
+
+  it('shows shimmer only before the first image and keeps the old layer during preload', () => {
+    const oldIcon = { fx: 'old-root', url: 'https://old.test/icon' }
+    const newIcon = { fx: 'new-root', url: 'https://new.test/icon' }
+
+    assert.deepEqual(getAppIconLayerState(null, newIcon), {
+      isShimmerVisible: true,
+      isDisplayedLayerVisible: false,
+      isCandidateLayerVisible: false
+    })
+    assert.deepEqual(getAppIconLayerState(oldIcon, newIcon), {
+      isShimmerVisible: false,
+      isDisplayedLayerVisible: true,
+      isCandidateLayerVisible: false
+    })
+    assert.deepEqual(getAppIconLayerState(newIcon, newIcon), {
+      isShimmerVisible: false,
+      isDisplayedLayerVisible: false,
+      isCandidateLayerVisible: true
+    })
+  })
+
+  it('keeps unknown consumer metadata pending until it is explicitly resolved', () => {
+    const initial = {
+      hasReadIconState: false,
+      consumerResolutionPending: undefined,
+      isDiscovering: false,
+      appFx: null,
+      currentIcon: null,
+      exhausted: false
+    }
+    assert.equal(isAppIconResolutionPending(initial), true)
+    assert.equal(isAppIconResolutionPending({
+      ...initial,
+      hasReadIconState: true,
+      consumerResolutionPending: true
+    }), true)
+    assert.equal(isAppIconResolutionPending({
+      ...initial,
+      hasReadIconState: true,
+      consumerResolutionPending: false
+    }), false)
+    assert.equal(isAppIconResolutionPending({
+      ...initial,
+      hasReadIconState: true,
+      appFx: 'known-root'
+    }), true)
+    assert.equal(isAppIconResolutionPending({
+      ...initial,
+      hasReadIconState: true,
+      consumerResolutionPending: false,
+      appFx: 'known-root'
+    }), false)
   })
 })

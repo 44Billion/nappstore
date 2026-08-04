@@ -3,7 +3,22 @@ import useWebStorage from '#hooks/use-web-storage.js'
 import lru from '#services/lru.js'
 import connectivityRetry from '#services/connectivity-retry.js'
 import { discoverHtmlIconFallbacks } from '#services/app-metadata-fetcher.js'
-import { getAppIconCandidateState } from '#shared/app-icon-candidates.js'
+import {
+  getAppIconLayerState,
+  getAppIconCandidateState,
+  isAppIconResolutionPending,
+  reconcileAppIconCandidates
+} from '#shared/app-icon-candidates.js'
+
+// Rejects late load/error events from a candidate that is no longer current.
+function imageMatchesCandidate (image, candidate) {
+  const loadedUrl = image.currentSrc || image.src
+  try {
+    return new URL(loadedUrl, document.baseURI).href === new URL(candidate.url, document.baseURI).href
+  } catch (_) {
+    return loadedUrl === candidate.url
+  }
+}
 
 // Displays manifest icons lazily and discovers HTML fallbacks only on demand.
 f('app-icon', ({ h, props }) => {
@@ -20,6 +35,7 @@ f('app-icon', ({ h, props }) => {
     appId$ () { return props.app$().id },
     appIndex$ () { return props.app$().index ?? '?' },
     appFx$ () { return props.app$().fx ?? null },
+    consumerResolutionPending$ () { return props.app$().iconResolutionPending },
     style$ () { return props.style$?.() ?? props.style ?? '' },
     cachedIcon$: null,
     iconCandidates$: [],
@@ -27,13 +43,20 @@ f('app-icon', ({ h, props }) => {
     candidatesKey$: null,
     exhausted$: false,
     isDiscovering$: false,
-    isImageLoaded$: false,
+    displayedIcon$: null,
+    hasReadIconState$: false,
     htmlDiscovered$: false,
     discoveryAttempted: false,
     currentIcon$ () { return this.iconCandidates$()[this.iconIndex$()] ?? null },
     isPending$ () {
-      return this.isDiscovering$() ||
-        (!!this.appFx$() && !this.currentIcon$() && !this.exhausted$())
+      return isAppIconResolutionPending({
+        hasReadIconState: this.hasReadIconState$(),
+        consumerResolutionPending: this.consumerResolutionPending$(),
+        isDiscovering: this.isDiscovering$(),
+        appFx: this.appFx$(),
+        currentIcon: this.currentIcon$(),
+        exhausted: this.exhausted$()
+      })
     },
     resetForApp (appId) {
       if (runtime.currentAppId === appId) return
@@ -44,7 +67,8 @@ f('app-icon', ({ h, props }) => {
       runtime.imageElement = null
       runtime.rejectedUrls = new Set()
       this.discoveryAttempted = false
-      this.isImageLoaded$(false)
+      this.displayedIcon$(null)
+      this.hasReadIconState$(false)
     },
     useCachedIcon (cachedIcon) {
       const state = getAppIconCandidateState(cachedIcon, runtime.rejectedUrls, {
@@ -56,13 +80,16 @@ f('app-icon', ({ h, props }) => {
         state.htmlDiscovered
       ])
       if (this.candidatesKey$() !== candidatesKey) {
-        const previousUrl = this.currentIcon$()?.url
+        const reconciled = reconcileAppIconCandidates(
+          state.candidates,
+          this.displayedIcon$(),
+          runtime.rejectedUrls
+        )
         this.candidatesKey$(candidatesKey)
         this.cachedIcon$(cachedIcon)
         this.htmlDiscovered$(state.htmlDiscovered)
-        this.iconCandidates$(state.candidates)
-        this.iconIndex$(state.index)
-        if (previousUrl !== state.candidates[state.index]?.url) this.isImageLoaded$(false)
+        this.iconCandidates$(reconciled.candidates)
+        this.iconIndex$(reconciled.index)
       }
       this.exhausted$(state.exhausted)
     },
@@ -75,7 +102,9 @@ f('app-icon', ({ h, props }) => {
     },
     markIconLoaded (event) {
       if (Number(event.currentTarget.dataset.iconIndex) !== this.iconIndex$()) return
-      this.isImageLoaded$(true)
+      const icon = this.currentIcon$()
+      if (!icon || !imageMatchesCandidate(event.currentTarget, icon)) return
+      this.displayedIcon$(icon)
       this.finishRetry()
     },
     async waitForOnline () {
@@ -156,6 +185,7 @@ f('app-icon', ({ h, props }) => {
       if (renderedIndex !== this.iconIndex$()) return
       const candidate = this.currentIcon$()
       if (!candidate) return
+      if (!imageMatchesCandidate(event.currentTarget, candidate)) return
 
       if (!candidate.url.startsWith('data:')) {
         let online = false
@@ -168,7 +198,6 @@ f('app-icon', ({ h, props }) => {
         index > renderedIndex && !runtime.rejectedUrls.has(next.url)
       )
       if (nextIndex >= 0) {
-        this.isImageLoaded$(false)
         this.iconIndex$(nextIndex)
         return
       }
@@ -184,6 +213,7 @@ f('app-icon', ({ h, props }) => {
     ])
     store.resetForApp(appId)
     store.useCachedIcon(cachedIcon)
+    store.hasReadIconState$(true)
   })
 
   useTask(async ({ track }) => {
@@ -200,8 +230,9 @@ f('app-icon', ({ h, props }) => {
   })
 
   const icon = store.currentIcon$()
-  if (icon && !store.exhausted$()) {
-    const isImageLoaded = store.isImageLoaded$()
+  const displayedIcon = store.displayedIcon$()
+  if (displayedIcon || (icon && !store.exhausted$())) {
+    const layerState = getAppIconLayerState(displayedIcon, icon)
 
     return h`
       <style>
@@ -211,7 +242,10 @@ f('app-icon', ({ h, props }) => {
           100% { opacity: 0.1; }
         }
       </style>
-      <span style=${`
+      <span
+        role='img'
+        aria-label='App icon'
+        style=${`
         display: block;
         position: relative;
         width: 100%;
@@ -226,25 +260,41 @@ f('app-icon', ({ h, props }) => {
             border-radius: inherit;
             background: currentColor;
             opacity: 0.1;
-            visibility: ${isImageLoaded ? 'hidden' : 'visible'};
-            animation: ${isImageLoaded ? 'none' : 'iconPulse 1.4s ease-in-out infinite'};
+            visibility: ${layerState.isShimmerVisible ? 'visible' : 'hidden'};
+            animation: ${layerState.isShimmerVisible ? 'iconPulse 1.4s ease-in-out infinite' : 'none'};
           `}
         />
         <img
-          ref=${store.setImageElement}
-          src=${icon.url}
-          loading='lazy'
-          data-icon-index=${store.iconIndex$()}
-          onload=${store.markIconLoaded}
-          onerror=${store.showNextIcon}
-          alt='App icon'
+          src=${displayedIcon?.url ?? null}
+          alt=''
+          aria-hidden='true'
           style=${`
             position: absolute;
             inset: 0;
             width: 100%;
             height: 100%;
             object-fit: cover;
-            visibility: ${isImageLoaded ? 'visible' : 'hidden'};
+            visibility: ${layerState.isDisplayedLayerVisible ? 'visible' : 'hidden'};
+            ${store.style$()}
+          `}
+        />
+        <img
+          ref=${store.setImageElement}
+          src=${icon?.url ?? null}
+          loading='lazy'
+          data-icon-index=${icon ? store.iconIndex$() : -1}
+          onload=${store.markIconLoaded}
+          onerror=${store.showNextIcon}
+          alt=''
+          aria-hidden='true'
+          style=${`
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: ${layerState.isCandidateLayerVisible ? 1 : 0};
+            pointer-events: none;
             ${store.style$()}
           `}
         />
