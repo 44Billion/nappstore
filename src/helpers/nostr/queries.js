@@ -26,7 +26,7 @@ async function createFallbackProfile (pubkey, getAvatar) {
       encodeURIComponent(await getAvatar(pubkey))
     }`,
     npub: npubEncode(pubkey),
-    meta: { events: [], generatedPicture: true }
+    meta: { events: [], generatedName: true, generatedPicture: true }
   }
 }
 
@@ -154,16 +154,17 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
   const picture = publishedPicture || `data:image/svg+xml;charset=utf-8,${
     encodeURIComponent(await _getSvgAvatar(event.pubkey))
   }`
+  const publishedName =
+    event.tags
+      .filter(t => ['name', 'display_name'].includes(t[0]) && t[1]?.trim?.())
+      .sort((a, b) => (b[0] === 'display_name' ? -1 : 1) - (a[0] === 'display_name' ? -1 : 1))[0]
+      ?.[1]?.trim?.() ||
+    eventContent.name?.trim?.() ||
+    eventContent.display_name?.trim?.() ||
+    null
 
   return {
-    name:
-      event.tags
-        .filter(t => ['name', 'display_name'].includes(t[0]) && t[1]?.trim?.())
-        .sort((a, b) => (b[0] === 'display_name' ? -1 : 1) - (a[0] === 'display_name' ? -1 : 1))[0]
-        ?.[1]?.trim?.() ||
-      eventContent.name?.trim?.() ||
-      eventContent.display_name?.trim?.() ||
-      `User#${getRandomId().slice(0, 5)}`,
+    name: publishedName || `User#${getRandomId().slice(0, 5)}`,
     about:
       [event.tags.find(t => t[0] === 'about')]
         .filter(Boolean)
@@ -174,6 +175,7 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
     npub: npubEncode(event.pubkey),
     meta: {
       events: [event],
+      generatedName: !publishedName,
       generatedPicture: !publishedPicture
     }
   }

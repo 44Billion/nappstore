@@ -62,7 +62,7 @@ f('nappsIndex', function () {
           retryWithSpam = false
 
           const filter = {
-            kinds: [35128, 35129, 35130],
+            kinds: [35128],
             until: this.oldestTimestamp$(),
             limit: APPS_PER_PAGE
           }
@@ -237,15 +237,29 @@ f('nappsIndex', function () {
 
     async loadProfiles (pubkeys) {
       const profileCache = this.profileCache$()
-      const uniquePubkeys = [...new Set(pubkeys)].filter(pk => !profileCache[pk])
+      const uniquePubkeys = [...new Set(pubkeys)].filter(
+        pk => !Object.prototype.hasOwnProperty.call(profileCache, pk)
+      )
 
       if (uniquePubkeys.length === 0) return
 
       try {
         const results = await getProfiles(uniquePubkeys)
-        this.profileCache$({ ...profileCache, ...results })
+        this.profileCache$(current => ({ ...current, ...results }))
       } catch (err) {
         console.error('Failed to load profiles:', err)
+        this.profileCache$(current => {
+          const next = { ...current }
+          for (const pubkey of uniquePubkeys) {
+            if (!Object.prototype.hasOwnProperty.call(next, pubkey)) {
+              next[pubkey] = {
+                name: '',
+                meta: { events: [], generatedName: true, loadFailed: true }
+              }
+            }
+          }
+          return next
+        })
       }
     },
 
@@ -317,6 +331,11 @@ f('nappsIndex', function () {
           50% { opacity: 0.5; }
           100% { opacity: 0.2; }
         }
+        @keyframes authorNamePulse {
+          0% { opacity: 0.35; }
+          50% { opacity: 0.7; }
+          100% { opacity: 0.35; }
+        }
       </style>
       <!-- Header -->
       <div style=${{
@@ -343,8 +362,15 @@ f('nappsIndex', function () {
         </div>
       `]
     : apps.map((app, index) => {
+      const isAuthorPending = !Object.prototype.hasOwnProperty.call(profileCache, app.pubkey)
       const profile = profileCache[app.pubkey] || {}
-      const authorName = profile.name || profile.display_name || 'Anonymous'
+      const publishedAuthorName = profile.meta?.generatedName
+        ? ''
+        : [profile.name, profile.display_name]
+            .find(name => typeof name === 'string' && name.trim())
+            ?.trim() || ''
+      const isAnonymous = !isAuthorPending && !publishedAuthorName
+      const authorName = publishedAuthorName || 'Anonymous'
       const key = app.id
       const isPendingOpen = pendingOpenAppId === app.id
 
@@ -470,12 +496,24 @@ f('nappsIndex', function () {
                       </div>
                       <div style=${{
                         fontSize: '12px',
-                        color: cssVars.colors.fg2,
+                        color: isAuthorPending ? 'transparent' : cssVars.colors.fg2,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
+                        whiteSpace: 'nowrap',
+                        width: isAuthorPending ? '84px' : 'auto',
+                        minHeight: '14px',
+                        borderRadius: isAuthorPending ? '7px' : '0',
+                        backgroundColor: isAuthorPending
+                          ? cssVars.colors.bgAvatarLoading
+                          : 'transparent',
+                        animation: isAuthorPending
+                          ? 'authorNamePulse 1.4s ease-in-out infinite'
+                          : 'none'
                       }}>
-                        by ${authorName}
+                        ${isAuthorPending ? '' : 'by '}
+                        <span style=${{ fontStyle: isAnonymous ? 'italic' : 'normal' }}>
+                          ${isAuthorPending ? '' : authorName}
+                        </span>
                       </div>
                     </div>
                   </div>

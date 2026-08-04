@@ -22,6 +22,8 @@ describe('Nostr profiles', () => {
     })
 
     assert.equal(profile.picture, 'https://example.com/alice.png')
+    assert.equal(profile.name, 'Alice')
+    assert.equal(profile.meta.generatedName, false)
     assert.equal(avatarCalls, 0)
   })
 
@@ -83,6 +85,21 @@ describe('Nostr profiles', () => {
     assert.equal(avatarCalls, 1)
     assert.equal(first[pubkey], second[pubkey])
     assert.equal(second[pubkey], cached[pubkey])
+    assert.equal(first[pubkey].meta.generatedName, true)
+  })
+
+  it('marks whitespace-only profile names as generated', async () => {
+    const profile = await eventToProfile({
+      kind: 0,
+      pubkey: 'e'.repeat(64),
+      tags: [['name', '   ']],
+      content: JSON.stringify({ display_name: '\t' })
+    }, {
+      _getSvgAvatar: () => '<svg />'
+    })
+
+    assert.match(profile.name, /^User#/)
+    assert.equal(profile.meta.generatedName, true)
   })
 
   it('selects the newest profile across both relays with the NIP-01 tie break', async () => {
