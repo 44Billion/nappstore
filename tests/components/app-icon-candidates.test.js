@@ -2,14 +2,57 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  appIconMonogramPalettes,
   getAppIconLayerState,
   getAppIconCandidateState,
+  getAppIconMonogram,
   isAppIconResolutionPending,
   normalizeAppIconCandidates,
   reconcileAppIconCandidates
 } from '#shared/app-icon-candidates.js'
 
+// Converts an sRGB hex color to its WCAG relative luminance.
+function getRelativeLuminance (hex) {
+  const channels = hex.match(/[a-f\d]{2}/gi).map(channel => parseInt(channel, 16) / 255)
+    .map(channel => channel <= 0.04045
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4
+    )
+  return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])
+}
+
+// Calculates the WCAG contrast ratio between two sRGB colors.
+function getContrastRatio (first, second) {
+  const luminances = [getRelativeLuminance(first), getRelativeLuminance(second)]
+    .sort((a, b) => b - a)
+  return (luminances[0] + 0.05) / (luminances[1] + 0.05)
+}
+
 describe('app icon candidates', () => {
+  it('builds Unicode-aware monograms from names', () => {
+    assert.equal(getAppIconMonogram('app-one', 'OpenDork').label, 'OD')
+    assert.equal(getAppIconMonogram('app-two', '  Radio   Garden  ').label, 'RG')
+    assert.equal(getAppIconMonogram('app-three', 'Árvore').label, 'ÁR')
+    assert.equal(getAppIconMonogram('app-four', '   ').label, '◈')
+  })
+
+  it('keeps colors tied to app identity rather than mutable metadata', () => {
+    const first = getAppIconMonogram('stable-id', 'Short name')
+    const renamed = getAppIconMonogram('stable-id', 'A much longer name')
+    assert.deepEqual(
+      { lightBg: first.lightBg, lightFg: first.lightFg, darkBg: first.darkBg, darkFg: first.darkFg },
+      { lightBg: renamed.lightBg, lightFg: renamed.lightFg, darkBg: renamed.darkBg, darkFg: renamed.darkFg }
+    )
+    assert.notEqual(first.label, renamed.label)
+  })
+
+  it('keeps every light and dark palette above WCAG AA text contrast', () => {
+    for (const palette of appIconMonogramPalettes) {
+      assert.ok(getContrastRatio(palette.lightBg, palette.lightFg) >= 4.5)
+      assert.ok(getContrastRatio(palette.darkBg, palette.darkFg) >= 4.5)
+    }
+  })
+
   it('keeps the primary URL first and deduplicates ordered fallbacks', () => {
     assert.deepEqual(normalizeAppIconCandidates({
       fx: 'primary',

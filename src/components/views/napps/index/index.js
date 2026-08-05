@@ -390,6 +390,7 @@ f('nappsIndex', function () {
               app: {
                 id: app.id,
                 index: index + 1,
+                name: app.name,
                 fx: app.iconFx,
                 iconResolutionPending: app.iconResolutionPending
               },

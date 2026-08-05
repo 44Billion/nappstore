@@ -627,7 +627,7 @@ f('nappsUpload', function () {
                       <f-to-signals
                         props=${{
                           from: ['app'],
-                          app: { id: encodedApp, index },
+                          app: { id: encodedApp, index, name: app.name },
                           render: ({ h, props }) => h`
                             <div style=${{
                               display: 'flex',

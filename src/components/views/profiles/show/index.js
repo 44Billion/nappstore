@@ -430,7 +430,7 @@ f('profilesShow', function () {
           <f-to-signals
             props=${{
               from: ['app'],
-              app: { id: app.id, index: index + 1 },
+              app: { id: app.id, index: index + 1, name: app.name },
               render: ({ h, props }) => h`
                 <div
                   onclick=${() => store.handleOpenApp(app)}
