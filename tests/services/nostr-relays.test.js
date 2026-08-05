@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { relayPool } from 'libp2r2p/relay'
+import { nappRelays as sharedNappRelays, relayPool } from 'libp2r2p/relay'
 
 import relays, { nappRelays, sendEventReport } from '#services/nostr-relays.js'
 
 test('exports the shared app discovery relays', () => {
+  assert.equal(nappRelays, sharedNappRelays)
   assert.deepEqual(nappRelays, [
     'wss://relay.44billion.net',
     'wss://relay.ditto.pub',
