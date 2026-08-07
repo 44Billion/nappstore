@@ -1,17 +1,7 @@
 import { isRenderableAppIconUrl } from '#helpers/app-icon.js'
+import { appIconMonogramPalettes } from '#assets/styles/theme.js'
 
-export const appIconMonogramPalettes = Object.freeze([
-  { lightBg: '#fee2e2', lightFg: '#991b1b', darkBg: '#7f1d1d', darkFg: '#fecaca' },
-  { lightBg: '#ffedd5', lightFg: '#9a3412', darkBg: '#7c2d12', darkFg: '#fed7aa' },
-  { lightBg: '#fef3c7', lightFg: '#92400e', darkBg: '#78350f', darkFg: '#fde68a' },
-  { lightBg: '#dcfce7', lightFg: '#166534', darkBg: '#14532d', darkFg: '#bbf7d0' },
-  { lightBg: '#ccfbf1', lightFg: '#115e59', darkBg: '#134e4a', darkFg: '#99f6e4' },
-  { lightBg: '#dbeafe', lightFg: '#1e40af', darkBg: '#1e3a8a', darkFg: '#bfdbfe' },
-  { lightBg: '#e0e7ff', lightFg: '#3730a3', darkBg: '#312e81', darkFg: '#c7d2fe' },
-  { lightBg: '#f3e8ff', lightFg: '#6b21a8', darkBg: '#581c87', darkFg: '#e9d5ff' },
-  { lightBg: '#fce7f3', lightFg: '#9d174d', darkBg: '#831843', darkFg: '#fbcfe8' },
-  { lightBg: '#e2e8f0', lightFg: '#334155', darkBg: '#334155', darkFg: '#e2e8f0' }
-])
+export { appIconMonogramPalettes }
 
 // Splits text by user-perceived characters when the platform supports it.
 function getGraphemes (value) {

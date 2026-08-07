@@ -44,6 +44,6 @@ iframe {
 @media (inverted-colors: inverted) {
   /* styles to apply if inversion of colors is detected */
   img, video, iframe, svg {
-    filter: invert(1)
+    filter: invert(1) hue-rotate(180deg);
   }
 }

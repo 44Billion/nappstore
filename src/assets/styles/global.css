@@ -1,3 +1,10 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
+}
+
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--bg-selected);
+  outline-offset: 2px;
 }

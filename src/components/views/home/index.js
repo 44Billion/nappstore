@@ -45,7 +45,7 @@ f('aHome', function () {
         display: 'flex',
         justifyContent: 'center',
         borderBottom: '1px solid ' + cssVars.colors.bg2,
-        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
+        boxShadow: '0 2px 8px ' + cssVars.colors.shadow
       }}>
         <div
           style=${{
@@ -96,19 +96,10 @@ f('aHome', function () {
                 borderRadius: '50%',
                 overflow: 'hidden',
                 border: '1px solid ' + cssVars.colors.bgSelected2,
-                transition: 'transform 0.2s, box-shadow 0.2s',
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'center',
                 backgroundColor: cssVars.colors.bgAvatar
-              }}
-              onmouseenter=${(e) => {
-                e.currentTarget.style.transform = 'scale(1.1)'
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)'
-              }}
-              onmouseleave=${(e) => {
-                e.currentTarget.style.transform = 'scale(1)'
-                e.currentTarget.style.boxShadow = 'none'
               }}
             >
               <a-avatar

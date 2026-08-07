@@ -328,7 +328,6 @@ f('app-icon', ({ h, props }) => {
   const monogram = getAppIconMonogram(store.appId$(), store.appName$())
   return h`
     <span
-      class='hue-revert'
       role='img'
       aria-label='App icon'
       style=${`

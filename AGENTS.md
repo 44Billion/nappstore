@@ -58,6 +58,23 @@ when turning it into a variable, even if it's not in camel-case.
 - When using core node imports, add the "node:" prefix, e.g.: `import fs from 'node:fs'`.
 - Prefer using promises instead of callbacks.
 
+## Styling Rules:
+
+- Colors come from `src/assets/styles/theme.js`: each token is a
+  `light-dark(<light>, <dark>)` pair resolved natively from
+  `prefers-color-scheme` (`color-scheme: light dark` in `global.css`). Do not
+  author color literals (`oklch(...)`, `#hex`, `rgb(...)`, `light-dark(...)`)
+  outside `theme.js` (or the `inverted-colors` accessibility rule in
+  `reset.css`); consume tokens via `cssVars.colors.*`. UGC media (avatars,
+  images, video) must never receive theme inversion filters.
+- Component `<style>` tags render into the global stylesheet scope — always
+  scope selectors under the component's host tag or a root id. Never write
+  top-level class selectors inside a component's style block.
+- Interaction is mobile-first: never use `:hover` as feedback. Use `:active`,
+  `:focus-visible` and `:disabled` with theme tokens.
+- The CSS reset sets `html { font-size: 0.0625em }`, so `1rem ≈ 1px`: use
+  `rem` for `font-size` only and `px` for everything else.
+
 ## Regarding Dependencies:
 
 - Avoid introducing new external dependencies unless absolutely necessary.

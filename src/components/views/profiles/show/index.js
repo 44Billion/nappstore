@@ -268,9 +268,9 @@ f('profilesShow', function () {
         flexDirection: 'column',
         gap: '16px',
         padding: '20px',
-        backgroundColor: cssVars.colors.mg,
+        backgroundColor: cssVars.colors.bg2,
         borderRadius: '12px',
-        border: '2px solid ' + cssVars.colors.mgBorder
+        border: '1px solid ' + cssVars.colors.bg3
       }}>
         ${
   isLoadingProfile
@@ -320,7 +320,7 @@ f('profilesShow', function () {
               <div style=${{
                 fontSize: '24px',
                 fontWeight: 'bold',
-                color: cssVars.colors.fg2,
+                color: cssVars.colors.fg,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap'
@@ -354,11 +354,11 @@ f('profilesShow', function () {
                   style=${{
                     padding: '8px 16px',
                     backgroundColor: isFollowing
-                      ? cssVars.colors.mg
-                      : cssVars.colors.primary,
-                    color: isFollowing ? cssVars.colors.fg2 : 'white',
+                      ? cssVars.colors.bg2
+                      : cssVars.colors.bgSelected,
+                    color: isFollowing ? cssVars.colors.fg2 : cssVars.colors.fgOnAccent,
                     border: isFollowing
-                      ? '2px solid ' + cssVars.colors.mgBorder
+                      ? '1px solid ' + cssVars.colors.bg3
                       : 'none',
                     borderRadius: '6px',
                     fontSize: '14px',
@@ -395,9 +395,9 @@ f('profilesShow', function () {
         <div style=${{
           fontSize: '20px',
           fontWeight: 'bold',
-          color: cssVars.colors.fg2,
+          color: cssVars.colors.fg,
           paddingBottom: '8px',
-          borderBottom: '2px solid ' + cssVars.colors.mgBorder
+          borderBottom: '1px solid ' + cssVars.colors.bg2
         }}>
           ${isOwnProfile ? 'My Apps' : 'Apps'}
         </div>
@@ -438,19 +438,10 @@ f('profilesShow', function () {
                     display: 'flex',
                     gap: '12px',
                     padding: '12px',
-                    backgroundColor: cssVars.colors.mg,
+                    backgroundColor: cssVars.colors.bg2,
                     borderRadius: '8px',
-                    border: '2px solid ' + cssVars.colors.mgBorder,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s'
-                  }}
-                  onmouseenter=${(e) => {
-                    e.currentTarget.style.borderColor = cssVars.colors.primary
-                    e.currentTarget.style.transform = 'translateY(-2px)'
-                  }}
-                  onmouseleave=${(e) => {
-                    e.currentTarget.style.borderColor = cssVars.colors.mgBorder
-                    e.currentTarget.style.transform = 'translateY(0)'
+                    border: '1px solid ' + cssVars.colors.bg3,
+                    cursor: 'pointer'
                   }}
                 >
                   <div style=${{
@@ -471,7 +462,7 @@ f('profilesShow', function () {
                     <div style=${{
                       fontSize: '14px',
                       fontWeight: 'bold',
-                      color: cssVars.colors.fg2,
+                      color: cssVars.colors.fg,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap'

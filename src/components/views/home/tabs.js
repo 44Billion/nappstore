@@ -32,15 +32,14 @@ f('homeTabs', function () {
     transition: 'all 0.2s',
     cursor: 'pointer',
     border: '1px solid ' + cssVars.colors.bg2,
-    outline: 'none',
     whiteSpace: 'nowrap'
   }
 
   const activeTabStyle = {
     ...baseTabStyle,
     backgroundColor: cssVars.colors.bgSelected,
-    color: cssVars.colors.fg2,
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)'
+    color: cssVars.colors.fgOnAccent,
+    boxShadow: '0 2px 8px ' + cssVars.colors.shadow
   }
 
   const inactiveTabStyle = {
@@ -61,23 +60,11 @@ f('homeTabs', function () {
         href='/'
         onclick=${store.onHomeClick}
         style=${isHomeActive ? activeTabStyle : inactiveTabStyle}
-        onmouseenter=${(e) => {
-          if (!isHomeActive) {
-            e.currentTarget.style.backgroundColor = cssVars.colors.mgBorder
-          }
-          e.currentTarget.style.transform = 'translateY(-2px)'
-        }}
-        onmouseleave=${(e) => {
-          if (!isHomeActive) {
-            e.currentTarget.style.backgroundColor = cssVars.colors.mg
-          }
-          e.currentTarget.style.transform = 'translateY(0)'
-        }}
       >
         <icon-cube-spark
           props=${{
             weight$: 'duotone',
-            style: 'svg { color: #fdd835; width: 1.2em; height: 1.2em; }'
+            style: 'svg { color: ' + cssVars.colors.tabDiscover + '; width: 1.2em; height: 1.2em; }'
           }}
         /><span style=${{ paddingLeft: '10px' }}>Discover</span>
       </a>
@@ -86,24 +73,12 @@ f('homeTabs', function () {
         href='/upload'
         onclick=${store.onUploadClick}
         style=${isUploadActive ? activeTabStyle : inactiveTabStyle}
-        onmouseenter=${(e) => {
-          if (!isUploadActive) {
-            e.currentTarget.style.backgroundColor = cssVars.colors.mgBorder
-          }
-          e.currentTarget.style.transform = 'translateY(-2px)'
-        }}
-        onmouseleave=${(e) => {
-          if (!isUploadActive) {
-            e.currentTarget.style.backgroundColor = cssVars.colors.mg
-          }
-          e.currentTarget.style.transform = 'translateY(0)'
-        }}
       >
         <icon-arrow-big-up-line
           props=${{
             weight$: 'duotone',
             style: `
-              svg { color: #8cafbf; width: 1.2em; height: 1.2em; }
+              svg { color: ${cssVars.colors.tabUpload}; width: 1.2em; height: 1.2em; }
               path { fill-opacity: .4; }
             `
           }}

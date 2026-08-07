@@ -100,7 +100,7 @@ f('aToast', function () {
               color,
               padding: '16px 20px',
               borderRadius: '8px',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+              boxShadow: '0 4px 12px ' + cssVars.colors.shadow,
               display: 'flex',
               alignItems: 'center',
               gap: '12px',

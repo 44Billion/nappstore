@@ -489,7 +489,7 @@ f('nappsUpload', function () {
                     <div style=${{
                       padding: '10px',
                       backgroundColor: cssVars.colors.error,
-                      color: 'white',
+                      color: cssVars.colors.fgOnAccent,
                       borderRadius: '4px',
                       fontSize: '12px'
                     }}>
@@ -546,7 +546,9 @@ f('nappsUpload', function () {
               backgroundColor: selectedFolder && !isUploading
                 ? cssVars.colors.bgSelected
                 : cssVars.colors.bg3,
-              color: 'white',
+              color: selectedFolder && !isUploading
+                ? cssVars.colors.fgOnAccent
+                : cssVars.colors.fg3,
               border: 'none',
               borderRadius: '6px',
               fontSize: '14px',
@@ -735,7 +737,7 @@ f('nappsUpload', function () {
                                       onclick=${() => store.handleCopyUrl(app)}
                                       style=${{
                                         // padding: '6px 10px',
-                                        color: 'white',
+                                        color: cssVars.colors.fg2,
                                         border: 'none',
                                         fontSize: '11px',
                                         fontWeight: 'bold',
