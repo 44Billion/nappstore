@@ -42,6 +42,8 @@ f('aHome', function () {
     }}>
       <!-- Header -->
       <header style=${{
+        position: 'relative',
+        zIndex: 1,
         display: 'flex',
         justifyContent: 'center',
         borderBottom: '1px solid ' + cssVars.colors.bg2,
@@ -131,6 +133,8 @@ f('aHome', function () {
 
       <!-- Navigation Tabs -->
       <div style=${{
+        position: 'relative',
+        zIndex: 0,
         maxWidth: '718px',
         margin: '0 auto',
         padding: '8px 10px 0',
@@ -142,6 +146,8 @@ f('aHome', function () {
       <!-- Main Content -->
       <main
         style=${{
+          position: 'relative',
+          zIndex: 0,
           maxWidth: '718px',
           margin: '0 auto'
         }}
