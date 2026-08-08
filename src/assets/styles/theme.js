@@ -42,6 +42,7 @@ export const defaultThemeColorValues = Object.freeze({
   error: colorPair('oklch(0.55 0.20 25.33)', 'oklch(0.55 0.20 25.33)'),
   fgOnAccent: colorPair('oklch(0.98 0 0)', 'oklch(0.98 0 0)'),
   shadow: colorPair('rgb(0 0 0 / 0.12)', 'rgb(0 0 0 / 0.15)'),
+  logoBg: colorPair('oklch(0.92 0 106.51)', 'oklch(0.29 0 106.51)'),
   tabDiscover: colorPair('#b8860b', '#fdd835'),
   tabUpload: colorPair('#5c7c8f', '#8cafbf')
 })

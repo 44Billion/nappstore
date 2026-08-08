@@ -3,7 +3,7 @@ import { cssVars } from '#assets/styles/theme.js'
 // import { npubEncode } from 'libp2r2p/nip19'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 // import useLocation from '#hooks/use-location.js'
-import logo from '#assets/media/plusapp.webp'
+import logo from '#assets/media/plusapp-mark.webp'
 import '#shared/avatar.js'
 import '#views/home/tabs.js'
 import '#views/home/router.js'
@@ -72,7 +72,8 @@ f('aHome', function () {
                 width: '36px',
                 height: '36px',
                 objectFit: 'contain',
-                borderRadius: '50%'
+                borderRadius: '50%',
+                backgroundColor: cssVars.colors.logoBg
               }}
             />
             <div style=${{
