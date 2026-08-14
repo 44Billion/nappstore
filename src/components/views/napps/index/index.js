@@ -21,6 +21,13 @@ function getTagValue (tags, key) {
   return tag ? tag.slice(1) : null
 }
 
+// Returns the first non-empty description without exposing temporary fallbacks.
+function getAppDescription (...values) {
+  return values
+    .find(value => typeof value === 'string' && value.trim())
+    ?.trim() || ''
+}
+
 // Lazy lists all apps
 f('nappsIndex', function () {
   const store = useStore(() => ({
@@ -162,6 +169,7 @@ f('nappsIndex', function () {
       })
       const metadata = getManifestMetadata(manifestEvent)
       const icon = findMarkedManifestAsset(manifestEvent, 'icon')
+      const description = getAppDescription(metadata.description, metadata.summary)
 
       return {
         id: encodedApp,
@@ -169,7 +177,8 @@ f('nappsIndex', function () {
         pubkey: manifestEvent.pubkey,
         kind: bundleKind,
         name: metadata.name || dTag,
-        description: metadata.description || metadata.summary || 'No description',
+        description,
+        descriptionResolutionPending: !description,
         iconFx: icon?.root || null,
         iconResolutionPending: true,
         uploadedAt: manifestEvent.created_at * 1000
@@ -233,17 +242,19 @@ f('nappsIndex', function () {
               if (metadata.icon) iconCache.setItem(cacheKey, metadata.icon)
               const needsHtml = needsHtmlMetadataFallback(metadata)
 
-              this.apps$(apps => apps.map(current => current.id === app.id
-                ? {
-                    ...current,
-                    name: metadata.name || current.name,
-                    description: metadata.description || current.description,
-                    iconFx: metadata.icon?.fx || current.iconFx,
-                    // HTML and Web App Manifest discovery may still add icon candidates.
-                    iconResolutionPending: needsHtml
-                  }
-                : current
-              ))
+              this.apps$(apps => apps.map(current => {
+                if (current.id !== app.id) return current
+                const description = getAppDescription(metadata.description, current.description)
+                return {
+                  ...current,
+                  name: metadata.name || current.name,
+                  description,
+                  descriptionResolutionPending: !description && needsHtml,
+                  iconFx: metadata.icon?.fx || current.iconFx,
+                  // HTML and Web App Manifest discovery may still add icon candidates.
+                  iconResolutionPending: needsHtml
+                }
+              }))
 
               if (needsHtml) {
                 metadata = await fetchAppMetadata(manifestEvent, relays, {
@@ -256,16 +267,18 @@ f('nappsIndex', function () {
             } catch (err) {
               console.error(`${getAppIconLogPrefix(app.id)} Failed to fetch app metadata:`, err)
             } finally {
-              this.apps$(apps => apps.map(current => current.id === app.id
-                ? {
-                    ...current,
-                    name: metadata?.name || current.name,
-                    description: metadata?.description || current.description,
-                    iconFx: metadata?.icon?.fx || current.iconFx,
-                    iconResolutionPending: false
-                  }
-                : current
-              ))
+              this.apps$(apps => apps.map(current => {
+                if (current.id !== app.id) return current
+                const description = getAppDescription(metadata?.description, current.description)
+                return {
+                  ...current,
+                  name: metadata?.name || current.name,
+                  description,
+                  descriptionResolutionPending: false,
+                  iconFx: metadata?.icon?.fx || current.iconFx,
+                  iconResolutionPending: false
+                }
+              }))
             }
           }))
         }))
@@ -273,11 +286,15 @@ f('nappsIndex', function () {
       } catch (err) {
         console.error('Failed to fetch app metadata and profiles:', err)
       } finally {
-        this.apps$(apps => apps.map(app =>
-          pendingAppIds.has(app.id) && app.iconResolutionPending
-            ? { ...app, iconResolutionPending: false }
-            : app
-        ))
+        this.apps$(apps => apps.map(app => {
+          if (!pendingAppIds.has(app.id)) return app
+          if (!app.iconResolutionPending && !app.descriptionResolutionPending) return app
+          return {
+            ...app,
+            descriptionResolutionPending: false,
+            iconResolutionPending: false
+          }
+        }))
       }
     },
 
@@ -377,7 +394,7 @@ f('nappsIndex', function () {
           50% { opacity: 0.5; }
           100% { opacity: 0.2; }
         }
-        @keyframes authorNamePulse {
+        @keyframes metadataTextPulse {
           0% { opacity: 0.35; }
           50% { opacity: 0.7; }
           100% { opacity: 0.35; }
@@ -417,6 +434,9 @@ f('nappsIndex', function () {
             ?.trim() || ''
       const isAnonymous = !isAuthorPending && !publishedAuthorName
       const authorName = publishedAuthorName || 'Anonymous'
+      const description = getAppDescription(app.description)
+      const isDescriptionPending = app.descriptionResolutionPending && !description
+      const isDescriptionFallback = !isDescriptionPending && !description
       const key = app.id
       const isPendingOpen = pendingOpenAppId === app.id
 
@@ -509,12 +529,24 @@ f('nappsIndex', function () {
                     <!-- App Description -->
                     <div style=${{
                       fontSize: '13px',
-                      color: cssVars.colors.fg2,
+                      color: isDescriptionPending ? 'transparent' : cssVars.colors.fg2,
+                      opacity: isDescriptionFallback ? 0.6 : 1,
+                      fontStyle: isDescriptionFallback ? 'italic' : 'normal',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
+                      whiteSpace: 'nowrap',
+                      width: isDescriptionPending ? '65%' : 'auto',
+                      maxWidth: '100%',
+                      minHeight: '15px',
+                      borderRadius: isDescriptionPending ? '7px' : '0',
+                      backgroundColor: isDescriptionPending
+                        ? cssVars.colors.bgAvatarLoading
+                        : 'transparent',
+                      animation: isDescriptionPending
+                        ? 'metadataTextPulse 1.4s ease-in-out infinite'
+                        : 'none'
                     }}>
-                      ${app.description}
+                      ${isDescriptionPending ? '' : description || 'No description'}
                     </div>
 
                     <!-- Author Info -->
@@ -559,7 +591,7 @@ f('nappsIndex', function () {
                           ? cssVars.colors.bgAvatarLoading
                           : 'transparent',
                         animation: isAuthorPending
-                          ? 'authorNamePulse 1.4s ease-in-out infinite'
+                          ? 'metadataTextPulse 1.4s ease-in-out infinite'
                           : 'none'
                       }}>
                         ${isAuthorPending ? '' : 'by '}
