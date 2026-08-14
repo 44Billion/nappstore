@@ -36,6 +36,14 @@ const APP_METADATA_CONCURRENCY = 4
 const APP_METADATA_TIMEOUT_MS = 20000
 const BLOSSOM_SERVICES_TIMEOUT_MS = 10000
 const RELAY_LOOKUP_TIMEOUT_MS = 10000
+const UPLOAD_STATUS_BY_EVENT_TYPE = Object.freeze({
+  'services-checking': 'Checking Blossom servers...',
+  init: 'Uploading app files...',
+  'media-uploaded': 'Uploading app media...',
+  'file-uploaded': 'Uploading app files...',
+  'manifest-published': 'Site manifest and app metadata published',
+  complete: 'Upload complete'
+})
 
 // Bounds an auxiliary lookup while safely consuming any eventual late result.
 async function withTimeout (promise, timeoutMs, message) {
@@ -214,18 +222,24 @@ f('nappsUpload', function () {
         let encodedApp
         uploadPhase = 'publishing'
         await publishApp(files, null, {
+          log (...args) {
+            console.info('[nappup]', ...args)
+          },
           onEvent (event) {
-            store.uploadProgress$({ progress: event.progress, status: event.type })
+            const previous = store.uploadProgress$()
+            const next = {
+              ...previous,
+              progress: event.progress,
+              status: UPLOAD_STATUS_BY_EVENT_TYPE[event.type] || event.type
+            }
             if (event.type === 'init') {
-              store.uploadProgress$({ progress: 0, status: '', totalFiles: event.totalFiles, filesProgress: 0 })
+              next.totalFiles = event.totalFiles
+              next.filesProgress = 0
             }
             if (event.type === 'file-uploaded' || event.type === 'media-uploaded') {
-              const prev = store.uploadProgress$()
-              store.uploadProgress$({ ...prev, filesProgress: (prev.filesProgress || 0) + 1 })
+              next.filesProgress = (previous.filesProgress || 0) + 1
             }
-            if (event.type === 'manifest-published') {
-              store.uploadProgress$({ ...store.uploadProgress$(), status: 'Site manifest and app metadata published' })
-            }
+            store.uploadProgress$(next)
             if (event.type === 'complete') {
               encodedApp = event.napp
             }
