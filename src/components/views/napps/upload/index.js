@@ -14,13 +14,44 @@ import { appEncode, appDecode } from 'libp2r2p/nip19'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
 import nostrRelays, { nappRelays, sendEventReport } from '#services/nostr-relays.js'
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
-import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
+import {
+  deduplicateEvents,
+  fetchAppMetadata,
+  needsHtmlMetadataFallback
+} from '#services/app-metadata-fetcher.js'
+import {
+  createUploadAppFromManifestEvent,
+  getMetadataText,
+  mergeUploadAppMetadata
+} from '#helpers/upload-app-listing.js'
 import { getAppLauncherUrl } from '#helpers/launcher-url.js'
 import { getAppIconLogPrefix } from '#helpers/app.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
 import '#shared/icons/icon-circle-number-1-filled.js'
 import '#shared/icons/icon-circle-number-2-filled.js'
+
+const APP_METADATA_CONCURRENCY = 4
+const APP_METADATA_TIMEOUT_MS = 20000
+const BLOSSOM_SERVICES_TIMEOUT_MS = 10000
+const RELAY_LOOKUP_TIMEOUT_MS = 10000
+
+// Bounds an auxiliary lookup while safely consuming any eventual late result.
+async function withTimeout (promise, timeoutMs, message) {
+  let timeoutId
+  const deadline = new Promise((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error(`${message} after ${timeoutMs}ms`)
+      error.name = 'TimeoutError'
+      reject(error)
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([promise, deadline])
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
 
 f('nappsUpload', function () {
   const { showToast } = useToast()
@@ -48,6 +79,70 @@ f('nappsUpload', function () {
     //   }
     // ],
     currentUploadingApp$: null,
+
+    cacheAppIcon (appId, icon) {
+      if (!icon) return
+      try {
+        lru.ns('apps').setItem(`appById_${appId}_icon`, icon)
+      } catch (err) {
+        console.error(`${getAppIconLogPrefix(appId)} Failed to cache icon:`, err)
+      }
+    },
+
+    updateAppMetadata (app, metadata, resolutionPending) {
+      this.myApps$(apps => apps.map(current => {
+        if (current.id !== app.id || current.manifestId !== app.manifestId) return current
+        return mergeUploadAppMetadata(current, metadata, resolutionPending)
+      }))
+    },
+
+    async resolveAppMetadata (app, manifestEvent, writeRelays, blossomServers, signal) {
+      const requestController = new AbortController()
+      const abortRequest = () => requestController.abort()
+      signal.addEventListener('abort', abortRequest, { once: true })
+      let timedOut = false
+      const timeoutId = setTimeout(() => {
+        timedOut = true
+        requestController.abort()
+      }, APP_METADATA_TIMEOUT_MS)
+      let metadata
+      try {
+        metadata = await fetchAppMetadata(manifestEvent, writeRelays, {
+          blossomServers,
+          cachedIcon: lru.ns('apps').getItem(`appById_${app.id}_icon`),
+          skipHtml: true,
+          appId: app.id,
+          signal: requestController.signal
+        })
+        if (requestController.signal.aborted) return
+        this.cacheAppIcon(app.id, metadata.icon)
+
+        const needsHtml = needsHtmlMetadataFallback(metadata)
+        this.updateAppMetadata(app, metadata, needsHtml)
+        if (needsHtml) {
+          metadata = await fetchAppMetadata(manifestEvent, writeRelays, {
+            blossomServers,
+            cachedIcon: metadata.icon,
+            appId: app.id,
+            signal: requestController.signal
+          })
+          if (requestController.signal.aborted) return
+          this.cacheAppIcon(app.id, metadata.icon)
+        }
+      } catch (err) {
+        if (timedOut) {
+          const error = new Error(`App metadata resolution timed out after ${APP_METADATA_TIMEOUT_MS}ms`)
+          error.name = 'TimeoutError'
+          console.error(`${getAppIconLogPrefix(app.id)} Failed to fetch app metadata:`, error)
+        } else if (err?.name !== 'AbortError') {
+          console.error(`${getAppIconLogPrefix(app.id)} Failed to fetch app metadata:`, err)
+        }
+      } finally {
+        clearTimeout(timeoutId)
+        signal.removeEventListener('abort', abortRequest)
+        if (!signal.aborted) this.updateAppMetadata(app, metadata, false)
+      }
+    },
 
     async handleFolderSelect (event) {
       const files = Array.from(event.target.files)
@@ -108,7 +203,7 @@ f('nappsUpload', function () {
         store.currentUploadingApp$({
           dTag: folderName,
           name: name || folderName,
-          description: description || 'No description',
+          description: description || '',
           icon: faviconUrl
         })
 
@@ -143,26 +238,23 @@ f('nappsUpload', function () {
           }
         }
 
-        const myApps = store.myApps$()
-        const existingIndex = myApps.findIndex(a => a.id === encodedApp)
         const appInfo = {
           id: encodedApp,
           dTag,
           pubkey,
           kind,
           name: name || dTag,
-          description: description || 'No description',
+          nameIsFallback: false,
+          nameResolutionPending: false,
+          description: description || '',
+          descriptionResolutionPending: false,
           icon: faviconUrl,
+          iconFx: null,
+          iconResolutionPending: false,
           uploadedAt: Date.now()
         }
 
-        if (existingIndex >= 0) {
-          myApps[existingIndex] = appInfo
-        } else {
-          myApps.unshift(appInfo)
-        }
-
-        store.myApps$(myApps)
+        store.myApps$(current => [appInfo, ...current.filter(app => app.id !== encodedApp)])
         store.selectedFolder$(null)
         store.currentUploadingApp$(null)
 
@@ -263,97 +355,91 @@ f('nappsUpload', function () {
   }))
 
   // Fetch user's uploaded apps from relays on load
-  useTask(async ({ isHotStart }) => {
+  useTask(async ({ isHotStart, cleanup }) => {
     if (isHotStart) return
+    const controller = new AbortController()
+    cleanup(() => controller.abort())
+
     try {
       store.isLoadingApps$(true)
       const pubkey = await maybePeekPublicKey()
-      let { write: writeRelays } = await getRelays(pubkey)
-      const PRIMAL_RELAY = 'wss://relay.primal.net'
-      writeRelays = [...new Set([...writeRelays, PRIMAL_RELAY])]
-
-      // Fetch all unified site manifest channels authored by this user.
-      const [{ result: events }, blossomServersByAuthor] = await Promise.all([
-        nostrRelays.getEvents(
-          { kinds: [35128, 35129, 35130], authors: [pubkey], limit: 400 },
-          writeRelays
-        ),
-        getBlossomServersByPubkey([pubkey])
-      ])
-      const blossomServers = blossomServersByAuthor[pubkey] || []
-
-      if (events.length === 0) {
+      if (!pubkey || controller.signal.aborted) {
         store.myApps$([])
-        store.isLoadingApps$(false)
         return
       }
 
-      // Group by channel and d tag, keeping only the newest replacement.
-      const appsByDTag = events.reduce((acc, event) => {
-        const dTag = event.tags.find(t => t[0] === 'd')?.[1]
-        if (!dTag) return acc
+      let writeRelays = []
+      try {
+        writeRelays = (await withTimeout(
+          getRelays(pubkey),
+          RELAY_LOOKUP_TIMEOUT_MS,
+          'Relay lookup timed out'
+        ))?.write || []
+      } catch (err) {
+        console.error('Failed to fetch app author relays:', err)
+      }
+      const PRIMAL_RELAY = 'wss://relay.primal.net'
+      writeRelays = [...new Set([...writeRelays, ...nappRelays, PRIMAL_RELAY])]
 
-        const key = `${event.kind}:${dTag}`
-        if (!acc[key] || event.created_at > acc[key].created_at) {
-          acc[key] = event
-        }
-        return acc
-      }, {})
-
-      // Fetch metadata for each app
-      const apps = await Promise.all(
-        Object.values(appsByDTag).map(async (manifestEvent) => {
-          let encodedApp
-          try {
-            const dTag = manifestEvent.tags.find(t => t[0] === 'd')[1]
-            encodedApp = appEncode({
-              dTag,
-              pubkey: manifestEvent.pubkey,
-              kind: manifestEvent.kind
-            })
-            const cacheKey = `appById_${encodedApp}_icon`
-            const iconCache = lru.ns('apps')
-            const metadata = await fetchAppMetadata(manifestEvent, writeRelays, {
-              blossomServers,
-              cachedIcon: iconCache.getItem(cacheKey),
-              appId: encodedApp
-            })
-
-            // Cache the complete fallback chain for app-icon.
-            if (metadata.icon) {
-              try {
-                iconCache.setItem(cacheKey, metadata.icon)
-              } catch (err) {
-                console.error(`${getAppIconLogPrefix(encodedApp)} Failed to cache icon:`, err)
-              }
-            }
-
-            return {
-              id: encodedApp,
-              dTag,
-              pubkey: manifestEvent.pubkey,
-              kind: manifestEvent.kind,
-              name: metadata.name || dTag,
-              description: metadata.description || 'No description',
-              icon: metadata.icon || '',
-              uploadedAt: manifestEvent.created_at * 1000
-            }
-          } catch (err) {
-            console.error(`${getAppIconLogPrefix(encodedApp)} Failed to fetch app metadata:`, err)
-            return null
-          }
-        }).filter(Boolean)
+      const blossomServersPromise = withTimeout(
+        getBlossomServersByPubkey([pubkey]),
+        BLOSSOM_SERVICES_TIMEOUT_MS,
+        'Blossom server lookup timed out'
+      ).catch(err => {
+        console.error('Failed to fetch app author Blossom servers:', err)
+        return {}
+      })
+      const { result: events } = await nostrRelays.getEvents(
+        { kinds: [35128, 35129, 35130], authors: [pubkey], limit: 400 },
+        writeRelays
       )
+      if (controller.signal.aborted) return
 
-      // Sort by upload date (most recent first)
-      apps.sort((a, b) => b.uploadedAt - a.uploadedAt)
+      if (events.length === 0) {
+        store.myApps$([])
+        return
+      }
 
-      store.myApps$(apps)
-    } catch (err) {
-      console.error('Failed to fetch apps:', err)
-      store.myApps$([])
-    } finally {
+      const entries = deduplicateEvents(events).flatMap(manifestEvent => {
+        const app = createUploadAppFromManifestEvent(manifestEvent)
+        return app ? [{ app, manifestEvent }] : []
+      })
+      entries.sort((a, b) => b.app.uploadedAt - a.app.uploadedAt)
+
+      // Publish manifest metadata immediately instead of waiting for the slowest app.
+      store.myApps$(current => {
+        const localApps = current.filter(app => !app.manifestId)
+        const localIds = new Set(localApps.map(app => app.id))
+        return [...localApps, ...entries
+          .map(entry => entry.app)
+          .filter(app => !localIds.has(app.id))
+        ].sort((a, b) => b.uploadedAt - a.uploadedAt)
+      })
       store.isLoadingApps$(false)
+
+      const blossomServersByAuthor = await blossomServersPromise
+      if (controller.signal.aborted) return
+      const blossomServers = blossomServersByAuthor[pubkey] || []
+      for (let index = 0; index < entries.length; index += APP_METADATA_CONCURRENCY) {
+        if (controller.signal.aborted) return
+        const batch = entries.slice(index, index + APP_METADATA_CONCURRENCY)
+        await Promise.all(batch.map(({ app, manifestEvent }) =>
+          store.resolveAppMetadata(
+            app,
+            manifestEvent,
+            writeRelays,
+            blossomServers,
+            controller.signal
+          )
+        ))
+      }
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        console.error('Failed to fetch apps:', err)
+        store.myApps$([])
+      }
+    } finally {
+      if (!controller.signal.aborted) store.isLoadingApps$(false)
     }
   })
 
@@ -377,6 +463,17 @@ f('nappsUpload', function () {
         margin: '0 auto',
         fontSize: '14px'
       }}>
+        <style>
+          @keyframes myAppsMetadataPulse {
+            0% { opacity: 0.35; }
+            50% { opacity: 0.7; }
+            100% { opacity: 0.35; }
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        </style>
         <!-- Header Section -->
         <div style=${{
           display: 'flex',
@@ -607,32 +704,36 @@ f('nappsUpload', function () {
                     Loading your apps...
                   </div>
                 </div>
-                <style>
-                  @keyframes spin {
-                    0% { transform: rotate(0deg); }
-                    100% { transform: rotate(360deg); }
-                  }
-                </style>
               `
               : myApps.length > 0
                 ? this.h`
                   ${myApps.map((app, index) => {
                     const isCurrentlyUploading = currentUploadingApp && currentUploadingApp.dTag === app.dTag
                     const progressPercent = overallProgress
-                    const borderColor = isCurrentlyUploading ? cssVars.colors.bgSelected : 'none' // cssVars.colors.bg2
+                    const borderColor = isCurrentlyUploading
+                      ? cssVars.colors.bgSelected
+                      : cssVars.colors.bg2
+                    const name = getMetadataText(app.name) || app.dTag
+                    const isNamePending = app.nameResolutionPending === true
+                    const isNameFallback = !isNamePending && app.nameIsFallback === true
+                    const description = getMetadataText(app.description)
+                    const isDescriptionPending = app.descriptionResolutionPending === true
+                    const isDescriptionFallback = !isDescriptionPending && !description
 
-                    const encodedApp = appEncode({
-                      dTag: app.dTag,
-                      pubkey: app.pubkey,
-                      kind: app.kind || 35128
-                    })
+                    const encodedApp = app.id
                     const appUrl = getAppLauncherUrl(encodedApp)
 
                     return this.h({ key: app.id })`
                       <f-to-signals
                         props=${{
                           from: ['app'],
-                          app: { id: encodedApp, index, name: app.name },
+                          app: {
+                            id: encodedApp,
+                            index,
+                            name,
+                            fx: app.iconFx,
+                            iconResolutionPending: app.iconResolutionPending
+                          },
                           render: ({ h, props }) => h`
                             <div style=${{
                               display: 'flex',
@@ -677,23 +778,46 @@ f('nappsUpload', function () {
                                 <div style=${{
                                   fontSize: '14px',
                                   fontWeight: 'bold',
-                                  color: cssVars.colors.fg2,
+                                  color: isNamePending ? 'transparent' : cssVars.colors.fg2,
+                                  opacity: isNameFallback ? 0.75 : 1,
+                                  fontStyle: isNameFallback ? 'italic' : 'normal',
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap'
+                                  whiteSpace: 'nowrap',
+                                  width: isNamePending ? '45%' : 'auto',
+                                  minHeight: '16px',
+                                  borderRadius: isNamePending ? '7px' : '0',
+                                  backgroundColor: isNamePending
+                                    ? cssVars.colors.bgAvatarLoading
+                                    : 'transparent',
+                                  animation: isNamePending
+                                    ? 'myAppsMetadataPulse 1.4s ease-in-out infinite'
+                                    : 'none'
                                 }}>
-                                  ${app.name}
+                                  ${isNamePending ? '' : name}
                                 </div>
                                 <div style=${{
                                   fontSize: '12px',
-                                  color: cssVars.colors.fg2,
+                                  color: isDescriptionPending ? 'transparent' : cssVars.colors.fg2,
+                                  opacity: isDescriptionFallback ? 0.6 : 1,
+                                  fontStyle: isDescriptionFallback ? 'italic' : 'normal',
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
                                   display: '-webkit-box',
                                   WebkitLineClamp: '2',
-                                  WebkitBoxOrient: 'vertical'
+                                  WebkitBoxOrient: 'vertical',
+                                  width: isDescriptionPending ? '70%' : 'auto',
+                                  maxWidth: '100%',
+                                  minHeight: '14px',
+                                  borderRadius: isDescriptionPending ? '7px' : '0',
+                                  backgroundColor: isDescriptionPending
+                                    ? cssVars.colors.bgAvatarLoading
+                                    : 'transparent',
+                                  animation: isDescriptionPending
+                                    ? 'myAppsMetadataPulse 1.4s ease-in-out infinite'
+                                    : 'none'
                                 }}>
-                                  ${app.description}
+                                  ${isDescriptionPending ? '' : description || 'No description'}
                                 </div>
                               </div>
                               <button
