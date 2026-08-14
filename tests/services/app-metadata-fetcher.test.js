@@ -230,6 +230,40 @@ describe('app metadata fetcher v2', () => {
     ), ['https://healthy.test', 'https://dead.test'])
   })
 
+  it('hedges a stalled Blossom download without waiting for its full timeout', async () => {
+    const html = new TextEncoder().encode('<title>Healthy fallback</title>')
+    const root = sha256Hex(html)
+    let stalledRequestAborted = false
+    mock.method(globalThis, 'fetch', (url, options) => {
+      if (options.method === 'HEAD') return Promise.resolve(new Response(null, { status: 405 }))
+      if (url.startsWith('https://dead.test')) {
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => {
+            stalledRequestAborted = true
+            reject(new DOMException('Aborted', 'AbortError'))
+          })
+        })
+      }
+      return Promise.resolve(new Response(html, { status: 200 }))
+    })
+
+    const startedAt = performance.now()
+    const metadata = await fetchAppMetadata({
+      pubkey: 'a'.repeat(64),
+      tags: [
+        ['service', 'blossom'],
+        ['path', 'index.html', root],
+        ['server', 'https://dead.test'],
+        ['server', 'https://healthy.test']
+      ]
+    }, [], { forceHtml: true })
+
+    assert.equal(metadata.name, 'Healthy fallback')
+    assert.equal(metadata.icon.htmlDiscovered, true)
+    assert.equal(stalledRequestAborted, true)
+    assert(performance.now() - startedAt < 3000)
+  })
+
   it('can publish direct icon candidates without waiting for missing HTML metadata', async () => {
     const root = 'd'.repeat(64)
     const fetchMock = mock.method(globalThis, 'fetch', async () => {

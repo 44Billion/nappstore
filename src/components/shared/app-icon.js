@@ -16,8 +16,8 @@ import {
 } from '#shared/app-icon-candidates.js'
 
 const ICON_CANDIDATE_TIMEOUT_MS = 5000
-const HTML_DISCOVERY_TIMEOUT_MS = 15000
-const HTML_DISCOVERY_TERMINAL_TIMEOUT_MS = 20000
+const HTML_DISCOVERY_TIMEOUT_MS = 12000
+const HTML_DISCOVERY_TERMINAL_TIMEOUT_MS = 15000
 
 // Reports when the complete discovery operation, including queueing, took too long.
 function discoveryTimeoutError (appId) {

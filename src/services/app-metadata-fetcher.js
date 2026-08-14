@@ -27,8 +27,10 @@ import { getAppIconLogPrefix } from '#helpers/app.js'
 const CHUNK_BYTES = 51000
 const QUERY_BATCH_SIZE = 100
 const DEFAULT_METADATA_FILE_LIMIT = 5.5 * 1024 * 1024
-const BLOSSOM_PROBE_TIMEOUT_MS = 4000
-const BLOSSOM_FETCH_TIMEOUT_MS = 10000
+const BLOSSOM_PROBE_TIMEOUT_MS = 2000
+const BLOSSOM_FETCH_TIMEOUT_MS = 6000
+const BLOSSOM_FETCH_BUDGET_MS = 8000
+const BLOSSOM_HEDGE_DELAY_MS = 750
 const ICON_PRIORITY = Object.freeze({
   MARKED: 0,
   HTML: 100,
@@ -186,6 +188,42 @@ async function fetchWithTimeout (url, { signal, timeoutMs, ...options } = {}) {
   }
 }
 
+// Waits before starting a fallback request and cancels the delay with its phase.
+function waitWithSignal (delayMs, signal) {
+  if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'))
+  if (delayMs <= 0) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+// Downloads and validates one Blossom asset within a timeout that includes its body.
+async function fetchBlossomBytes (asset, server, maxSizeBytes, signal) {
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(), BLOSSOM_FETCH_TIMEOUT_MS)
+  try {
+    const response = await fetch(`${server}/${asset.root}`, { signal: controller.signal })
+    if (!response.ok) throw new Error(`Blossom GET returned ${response.status}`)
+    const bytes = await readResponseBytes(response, maxSizeBytes)
+    if (!bytes || await sha256Hex(bytes) !== asset.root) throw new Error('Invalid Blossom asset')
+    return bytes
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
+}
+
 // Puts a responsive server first without waiting for an earlier dead host.
 export async function rankBlossomServers (asset, blossomServers, {
   signal,
@@ -222,22 +260,27 @@ export async function rankBlossomServers (asset, blossomServers, {
 
 async function fetchFromBlossom (asset, blossomServers, maxSizeBytes = null, signal) {
   const servers = await rankBlossomServers(asset, blossomServers, { signal })
-  for (const server of servers) {
-    try {
-      const response = await fetchWithTimeout(`${server}/${asset.root}`, {
-        signal,
-        timeoutMs: BLOSSOM_FETCH_TIMEOUT_MS
-      })
-      if (!response.ok) continue
-      const bytes = await readResponseBytes(response, maxSizeBytes)
-      if (!bytes || await sha256Hex(bytes) !== asset.root) continue
-      warnSizeMismatch('blossom', asset.root, asset.size, bytes.length)
-      return bytes
-    } catch (error) {
-      if (signal?.aborted) throw error
-    }
+  if (!servers.length) return null
+
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(), BLOSSOM_FETCH_BUDGET_MS)
+  try {
+    const bytes = await Promise.any(servers.map(async (server, index) => {
+      await waitWithSignal(index * BLOSSOM_HEDGE_DELAY_MS, controller.signal)
+      return fetchBlossomBytes(asset, server, maxSizeBytes, controller.signal)
+    }))
+    warnSizeMismatch('blossom', asset.root, asset.size, bytes.length)
+    return bytes
+  } catch (error) {
+    if (signal?.aborted) throw error
+    return null
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+    signal?.removeEventListener('abort', onAbort)
   }
-  return null
 }
 
 function chunksToText (binaryChunks) {
