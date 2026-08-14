@@ -409,10 +409,10 @@ f('nappsIndex', function () {
       `]
     : apps.map((app, index) => {
       const isAuthorPending = !Object.prototype.hasOwnProperty.call(profileCache, app.pubkey)
-      const profile = profileCache[app.pubkey] || {}
-      const publishedAuthorName = profile.meta?.generatedName
+      const profile = isAuthorPending ? null : profileCache[app.pubkey] || null
+      const publishedAuthorName = profile?.meta?.generatedName
         ? ''
-        : [profile.name, profile.display_name]
+        : [profile?.name, profile?.display_name]
             .find(name => typeof name === 'string' && name.trim())
             ?.trim() || ''
       const isAnonymous = !isAuthorPending && !publishedAuthorName

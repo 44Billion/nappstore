@@ -1,11 +1,18 @@
-import { f, useSignal, useStore, useAsyncComputed } from '#f'
-import { getSvgAvatar, isCacheableAvatarProfile, isValidAvatarPicture } from '#helpers/avatar.js'
+import { f, useSignal, useStore, useAsyncComputed, useTask } from '#f'
+import {
+  getSvgAvatar,
+  isCacheableAvatarProfile,
+  isDataAvatarPicture,
+  isValidAvatarPicture
+} from '#helpers/avatar.js'
 import '#shared/icons/icon-user-circle.js'
 import '#shared/svg.js'
 import { cssVars } from '#assets/styles/theme.js'
 import { getProfile, selectPreferredProfile } from '#helpers/nostr/queries.js'
 import useWebStorage from '#hooks/use-web-storage.js'
 import lru from '#services/lru.js'
+
+const AVATAR_PICTURE_TIMEOUT_MS = 15000
 
 // wrap it with a div setting width/height, border-radius and background-color
 f('a-avatar', ({ h, props }) => {
@@ -49,7 +56,7 @@ f('a-avatar', ({ h, props }) => {
       if (!pk) return providedProfile
 
       const queriedProfile = await getProfile(pk).catch(error => {
-        console.error(error)
+        console.error(`[avatar ${pk}] Failed to refresh profile:`, error)
         return null
       })
       const freshProfile = selectPreferredProfile(providedProfile, queriedProfile)
@@ -82,6 +89,7 @@ f('a-avatar', ({ h, props }) => {
     },
     isPictureLoaded$ () {
       const picture = this.pictureToRender$()
+      if (isDataAvatarPicture(picture)) return true
       const loaded = this.loadedPicture$()
       return !!picture && loaded?.pk === this.pk$() && loaded.picture === picture
     },
@@ -90,11 +98,16 @@ f('a-avatar', ({ h, props }) => {
       if (!picture || event.currentTarget.getAttribute('src') !== picture) return
       this.loadedPicture$({ pk: this.pk$(), picture })
     },
+    failPicture (picture, error) {
+      if (!picture || picture !== this.pictureToRender$()) return
+      console.error(`[avatar ${this.pk$() || 'unknown'}] Failed to load avatar picture:`, error)
+      this.loadedPicture$(null)
+      this.rejectedPicture$({ pk: this.pk$(), picture })
+    },
     rejectPicture (event) {
       const picture = this.pictureToRender$()
       if (!picture || event.currentTarget.getAttribute('src') !== picture) return
-      this.loadedPicture$(null)
-      this.rejectedPicture$({ pk: this.pk$(), picture })
+      this.failPicture(picture, new Error(`Avatar picture failed to load: ${picture}`))
     },
     svg$ () {
       const seed = pk$()
@@ -111,6 +124,21 @@ f('a-avatar', ({ h, props }) => {
       ]
     }
   }))
+
+  useTask(({ track, cleanup }) => {
+    const { picture, isLoaded } = track(() => ({
+      picture: store.pictureToRender$(),
+      isLoaded: store.isPictureLoaded$()
+    }))
+    if (!picture || isLoaded) return
+
+    const timeoutId = setTimeout(() => {
+      const error = new Error(`Avatar picture timed out after ${AVATAR_PICTURE_TIMEOUT_MS}ms: ${picture}`)
+      error.name = 'TimeoutError'
+      store.failPicture(picture, error)
+    }, AVATAR_PICTURE_TIMEOUT_MS)
+    cleanup(() => clearTimeout(timeoutId))
+  })
 
   if (!store.profile$() && store.refreshedProfile$.promise$().isLoading) {
     return h`<div
@@ -169,7 +197,6 @@ f('a-avatar', ({ h, props }) => {
         />
         <img
           src=${picture}
-          loading='lazy'
           decoding='async'
           onload=${store.markPictureLoaded}
           onerror=${store.rejectPicture}

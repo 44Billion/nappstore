@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { getSvgAvatar, isCacheableAvatarProfile, isValidAvatarPicture } from '#helpers/avatar.js'
+import {
+  getSvgAvatar,
+  isCacheableAvatarProfile,
+  isDataAvatarPicture,
+  isValidAvatarPicture
+} from '#helpers/avatar.js'
 
 function normalizeRandomIds (svg) {
   const suffix = svg.match(/id="[^"]+-([a-f0-9]{6})"/)?.[1]
@@ -37,6 +42,12 @@ describe('local avatars', () => {
 })
 
 describe('avatar picture validation', () => {
+  it('identifies data images without depending on scheme casing', () => {
+    assert.equal(isDataAvatarPicture('data:image/svg+xml,%3Csvg%2F%3E'), true)
+    assert.equal(isDataAvatarPicture('DATA:image/png;base64,AAAA'), true)
+    assert.equal(isDataAvatarPicture('https://example.test/avatar.png'), false)
+  })
+
   it('accepts supported data and HTTP image sources', () => {
     assert.equal(isValidAvatarPicture('data:image/svg+xml,%3Csvg%3E'), true)
     assert.equal(isValidAvatarPicture('https://example.test/avatar.webp?size=64'), true)

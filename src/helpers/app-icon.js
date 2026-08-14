@@ -1,3 +1,9 @@
+// Identifies self-contained app icons that require no network request.
+export function isDataAppIconUrl (value) {
+  return typeof value === 'string' &&
+    /^data:image\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(value)
+}
+
 // Accepts only self-contained images and absolute HTTP(S) icon URLs.
 export function isRenderableAppIconUrl (value) {
   if (
@@ -7,7 +13,7 @@ export function isRenderableAppIconUrl (value) {
     /\s/.test(value)
   ) return false
 
-  if (/^data:image\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(value)) return true
+  if (isDataAppIconUrl(value)) return true
 
   try {
     const url = new URL(value)

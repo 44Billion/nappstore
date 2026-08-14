@@ -4,6 +4,7 @@ import lru from '#services/lru.js'
 import connectivityRetry from '#services/connectivity-retry.js'
 import { discoverHtmlIconFallbacks } from '#services/app-metadata-fetcher.js'
 import { getCanonicalAppId, getAppIconLogPrefix } from '#helpers/app.js'
+import { isDataAppIconUrl } from '#helpers/app-icon.js'
 import {
   getAppIconLayerState,
   getAppIconCandidateState,
@@ -157,7 +158,7 @@ f('app-icon', ({ h, props }) => {
     },
     startCandidateTimeout (image, candidate, renderedIndex) {
       this.clearCandidateTimeout()
-      if (!image || !candidate || candidate.url.startsWith('data:')) return
+      if (!image || !candidate || isDataAppIconUrl(candidate.url)) return
       const start = () => {
         runtime.candidateTimer = setTimeout(() => {
           runtime.candidateTimer = null
@@ -312,7 +313,7 @@ f('app-icon', ({ h, props }) => {
       if (!candidate || this.currentIcon$()?.url !== candidate.url) return
       if (requireImageMatch && !imageMatchesCandidate(image, candidate)) return
 
-      if (!candidate.url.startsWith('data:')) {
+      if (!isDataAppIconUrl(candidate.url)) {
         let online = false
         try { online = await connectivityRetry.confirmOnline({ force: true }) } catch (_) {}
         if (!online) return this.retryCurrentWhenOnline()
