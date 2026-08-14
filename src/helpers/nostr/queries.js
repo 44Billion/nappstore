@@ -1,6 +1,7 @@
 import nostrRelays, { seedRelays, freeRelays } from '#services/nostr-relays.js'
 import { npubEncode } from 'libp2r2p/nip19'
 import { pickRelaysForPubkeys } from 'libp2r2p/relay'
+import { isValidPublicBlossomServerUrl, normalizeBlossomServerUrl } from 'libp2r2p/url'
 import { getSvgAvatar } from '#helpers/avatar.js'
 import { getRandomId } from '#helpers/misc.js'
 import { maybeUnref } from '#helpers/timer.js'
@@ -182,31 +183,56 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
 }
 
 const relaysByPubkey = {}
+const relayRequestsByPubkey = new Map()
+
+function cacheRelays (pubkey, relays) {
+  relaysByPubkey[pubkey] = relays
+  maybeUnref(setTimeout(() => {
+    if (relaysByPubkey[pubkey] === relays) delete relaysByPubkey[pubkey]
+  }, PROFILE_CACHE_TTL))
+}
+
+async function loadMissingRelays (pubkeys, nostrRelays) {
+  const { result: getEventsResult, errors } = await nostrRelays.getEvents(
+    { kinds: [10002], authors: pubkeys, limit: pubkeys.length },
+    seedRelays
+  )
+  if (errors.length) console.log(errors)
+
+  const latestByPubkey = {}
+  for (const event of getEventsResult) {
+    if (isNewerReplaceableEvent(event, latestByPubkey[event.pubkey])) latestByPubkey[event.pubkey] = event
+  }
+
+  for (const pubkey of pubkeys) {
+    const event = latestByPubkey[pubkey]
+    cacheRelays(pubkey, event
+      ? eventToRelays(event)
+      : { read: freeRelays.slice(0, 2), write: freeRelays.slice(0, 2), meta: { events: [] } }
+    )
+  }
+}
+
 // Returns a mapping of pubkeys to their relays.
 export async function getRelaysByPubkey (pubkeys, { _nostrRelays = nostrRelays } = {}) {
-  const missingPubkeys = pubkeys.filter(pk => !relaysByPubkey[pk])
-  if (missingPubkeys.length > 0) {
-    const { result: getEventsResult, errors } = await _nostrRelays.getEvents({ kinds: [10002], authors: missingPubkeys, limit: missingPubkeys.length }, seedRelays)
-    if (errors.length) console.log(errors)
-
-    const latestByPubkey = {}
-    for (const event of getEventsResult) {
-      if (isNewerReplaceableEvent(event, latestByPubkey[event.pubkey])) latestByPubkey[event.pubkey] = event
-    }
-
-    for (const pubkey of missingPubkeys) {
-      const event = latestByPubkey[pubkey]
-      if (event) {
-        relaysByPubkey[pubkey] = eventToRelays(event)
-        maybeUnref(setTimeout(
-          () => { delete relaysByPubkey[pubkey] },
-          3 * 60 * 1000
-        ))
+  const uniquePubkeys = [...new Set(pubkeys)]
+  const missingPubkeys = uniquePubkeys.filter(pk => !relaysByPubkey[pk])
+  const pubkeysToLoad = missingPubkeys.filter(pk => !relayRequestsByPubkey.has(pk))
+  if (pubkeysToLoad.length > 0) {
+    const request = loadMissingRelays(pubkeysToLoad, _nostrRelays).finally(() => {
+      for (const pubkey of pubkeysToLoad) {
+        if (relayRequestsByPubkey.get(pubkey) === request) relayRequestsByPubkey.delete(pubkey)
       }
-    }
+    })
+    for (const pubkey of pubkeysToLoad) relayRequestsByPubkey.set(pubkey, request)
   }
+
+  await Promise.all([...new Set(
+    missingPubkeys.map(pk => relayRequestsByPubkey.get(pk)).filter(Boolean)
+  )])
+
   return pubkeys.reduce((acc, pubkey) => {
-    acc[pubkey] = relaysByPubkey[pubkey] || { read: freeRelays.slice(0, 2), write: freeRelays.slice(0, 2), meta: { events: [] } }
+    acc[pubkey] = relaysByPubkey[pubkey]
     return acc
   }, {})
 }
@@ -217,41 +243,61 @@ export async function getRelays (pubkey, { _nostrRelays = nostrRelays } = {}) {
   return relaysByPubkeyResult[pubkey]
 }
 const blossomServersByPubkey = {}
+const blossomRequestsByPubkey = new Map()
+
+function cacheBlossomServers (pubkey, servers) {
+  blossomServersByPubkey[pubkey] = servers
+  maybeUnref(setTimeout(() => {
+    if (blossomServersByPubkey[pubkey] === servers) delete blossomServersByPubkey[pubkey]
+  }, PROFILE_CACHE_TTL))
+}
+
+async function loadMissingBlossomServers (pubkeys, { nostrRelays, getRelaysByPubkey }) {
+  const relaysByAuthor = await getRelaysByPubkey(pubkeys)
+  const relayToAuthors = pickRelaysForPubkeys(pubkeys, relaysByAuthor)
+  const results = await Promise.all(
+    [...relayToAuthors.entries()].map(([relay, authors]) =>
+      nostrRelays.getEvents({ kinds: [10063], authors }, [relay])
+    )
+  )
+  const latestByPubkey = {}
+  for (const event of results.flatMap(result => result.result)) {
+    if (isNewerReplaceableEvent(event, latestByPubkey[event.pubkey])) latestByPubkey[event.pubkey] = event
+  }
+  for (const pubkey of pubkeys) {
+    const event = latestByPubkey[pubkey]
+    cacheBlossomServers(pubkey, event
+      ? event.tags
+        .filter(tag => tag[0] === 'server' && isValidPublicBlossomServerUrl(tag[1]))
+        .map(tag => normalizeBlossomServerUrl(tag[1]))
+      : []
+    )
+  }
+}
+
 // Returns a mapping of pubkeys to their blossom server URLs (kind 10063).
 export async function getBlossomServersByPubkey (pubkeys, { _nostrRelays = nostrRelays, _getRelaysByPubkey = getRelaysByPubkey } = {}) {
-  const missingPubkeys = pubkeys.filter(pk => !blossomServersByPubkey[pk])
-  if (missingPubkeys.length > 0) {
-    const relaysByAuthor = await _getRelaysByPubkey(missingPubkeys)
-    const relayToAuthors = pickRelaysForPubkeys(missingPubkeys, relaysByAuthor)
-
-    const results = await Promise.all(
-      [...relayToAuthors.entries()]
-        .map(([relay, authors]) =>
-          _nostrRelays.getEvents({ kinds: [10063], authors }, [relay])
-        )
-    )
-    const allEvents = results.flatMap(r => r.result)
-
-    const latestByPubkey = {}
-    for (const event of allEvents) {
-      if (isNewerReplaceableEvent(event, latestByPubkey[event.pubkey])) latestByPubkey[event.pubkey] = event
-    }
-
-    for (const pubkey of missingPubkeys) {
-      const event = latestByPubkey[pubkey]
-      if (event) {
-        blossomServersByPubkey[pubkey] = event.tags
-          .filter(t => t[0] === 'server' && t[1])
-          .map(t => t[1])
-        maybeUnref(setTimeout(
-          () => { delete blossomServersByPubkey[pubkey] },
-          3 * 60 * 1000
-        ))
+  const uniquePubkeys = [...new Set(pubkeys)]
+  const missingPubkeys = uniquePubkeys.filter(pk => !blossomServersByPubkey[pk])
+  const pubkeysToLoad = missingPubkeys.filter(pk => !blossomRequestsByPubkey.has(pk))
+  if (pubkeysToLoad.length > 0) {
+    const request = loadMissingBlossomServers(pubkeysToLoad, {
+      nostrRelays: _nostrRelays,
+      getRelaysByPubkey: _getRelaysByPubkey
+    }).finally(() => {
+      for (const pubkey of pubkeysToLoad) {
+        if (blossomRequestsByPubkey.get(pubkey) === request) blossomRequestsByPubkey.delete(pubkey)
       }
-    }
+    })
+    for (const pubkey of pubkeysToLoad) blossomRequestsByPubkey.set(pubkey, request)
   }
+
+  await Promise.all([...new Set(
+    missingPubkeys.map(pk => blossomRequestsByPubkey.get(pk)).filter(Boolean)
+  )])
+
   return pubkeys.reduce((acc, pubkey) => {
-    acc[pubkey] = blossomServersByPubkey[pubkey] || []
+    acc[pubkey] = blossomServersByPubkey[pubkey]
     return acc
   }, {})
 }

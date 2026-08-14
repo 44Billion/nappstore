@@ -3,13 +3,38 @@ import useWebStorage from '#hooks/use-web-storage.js'
 import lru from '#services/lru.js'
 import connectivityRetry from '#services/connectivity-retry.js'
 import { discoverHtmlIconFallbacks } from '#services/app-metadata-fetcher.js'
+import { getCanonicalAppId, getAppIconLogPrefix } from '#helpers/app.js'
 import {
   getAppIconLayerState,
   getAppIconCandidateState,
+  getEquivalentAppIconCandidateIndex,
   getAppIconMonogram,
+  getAppIconUpgradeIndex,
   isAppIconResolutionPending,
+  promoteAppIconCandidate,
   reconcileAppIconCandidates
 } from '#shared/app-icon-candidates.js'
+
+const ICON_CANDIDATE_TIMEOUT_MS = 5000
+const HTML_DISCOVERY_TIMEOUT_MS = 15000
+const HTML_DISCOVERY_TERMINAL_TIMEOUT_MS = 20000
+
+// Reports when the complete discovery operation, including queueing, took too long.
+function discoveryTimeoutError (appId) {
+  const error = new Error(
+    `App icon discovery timed out for ${appId} after ${HTML_DISCOVERY_TERMINAL_TIMEOUT_MS}ms`
+  )
+  error.name = 'TimeoutError'
+  error.appId = appId
+  return error
+}
+
+// Stops a component-owned operation without reporting an expected unmount as a failure.
+function componentAbortError () {
+  const error = new Error('App icon discovery aborted')
+  error.name = 'AbortError'
+  return error
+}
 
 // Rejects late load/error events from a candidate that is no longer current.
 function imageMatchesCandidate (image, candidate) {
@@ -29,7 +54,12 @@ f('app-icon', ({ h, props }) => {
     currentAppId: null,
     imageElement: null,
     retryRelease: null,
+    candidateTimer: null,
+    candidateObserver: null,
+    upgradeAttempted: false,
+    upgradeCandidateUrl: null,
     rejectedUrls: new Set(),
+    discoveryController: null,
     abortController: new AbortController()
   }))
   const store = useStore(() => ({
@@ -62,10 +92,14 @@ f('app-icon', ({ h, props }) => {
     resetForApp (appId) {
       if (runtime.currentAppId === appId) return
       this.finishRetry()
+      this.clearCandidateTimeout()
+      runtime.discoveryController?.abort()
       runtime.abortController.abort()
       runtime.abortController = new AbortController()
       runtime.currentAppId = appId
       runtime.imageElement = null
+      runtime.upgradeAttempted = false
+      runtime.upgradeCandidateUrl = null
       runtime.rejectedUrls = new Set()
       this.discoveryAttempted = false
       this.displayedIcon$(null)
@@ -86,6 +120,20 @@ f('app-icon', ({ h, props }) => {
           this.displayedIcon$(),
           runtime.rejectedUrls
         )
+        const upgradeIndex = getAppIconUpgradeIndex(
+          reconciled.candidates,
+          this.displayedIcon$(),
+          runtime.rejectedUrls,
+          {
+            discoveryComplete: state.htmlDiscovered,
+            upgradeAttempted: runtime.upgradeAttempted
+          }
+        )
+        if (upgradeIndex >= 0) {
+          reconciled.index = upgradeIndex
+          runtime.upgradeAttempted = true
+          runtime.upgradeCandidateUrl = reconciled.candidates[upgradeIndex].url
+        }
         this.candidatesKey$(candidatesKey)
         this.cachedIcon$(cachedIcon)
         this.htmlDiscovered$(state.htmlDiscovered)
@@ -101,21 +149,56 @@ f('app-icon', ({ h, props }) => {
       runtime.retryRelease?.()
       runtime.retryRelease = null
     },
+    clearCandidateTimeout () {
+      if (runtime.candidateTimer) clearTimeout(runtime.candidateTimer)
+      runtime.candidateObserver?.disconnect()
+      runtime.candidateTimer = null
+      runtime.candidateObserver = null
+    },
+    startCandidateTimeout (image, candidate, renderedIndex) {
+      this.clearCandidateTimeout()
+      if (!image || !candidate || candidate.url.startsWith('data:')) return
+      const start = () => {
+        runtime.candidateTimer = setTimeout(() => {
+          runtime.candidateTimer = null
+          if (runtime.imageElement === image) image.removeAttribute('src')
+          this.rejectCandidate(image, candidate, renderedIndex, { requireImageMatch: false })
+        }, ICON_CANDIDATE_TIMEOUT_MS)
+      }
+      if (typeof IntersectionObserver === 'undefined') return start()
+      runtime.candidateObserver = new IntersectionObserver(entries => {
+        if (!entries.some(entry => entry.isIntersecting)) return
+        runtime.candidateObserver?.disconnect()
+        runtime.candidateObserver = null
+        if (runtime.imageElement === image && this.currentIcon$()?.url === candidate.url) start()
+      })
+      runtime.candidateObserver.observe(image)
+    },
     markIconLoaded (event) {
       if (Number(event.currentTarget.dataset.iconIndex) !== this.iconIndex$()) return
       const icon = this.currentIcon$()
       if (!icon || !imageMatchesCandidate(event.currentTarget, icon)) return
+      this.clearCandidateTimeout()
+      if (runtime.upgradeCandidateUrl === icon.url) runtime.upgradeCandidateUrl = null
       this.displayedIcon$(icon)
+      if (this.cachedIcon$()?.url !== icon.url) {
+        const promoted = promoteAppIconCandidate(this.cachedIcon$(), icon)
+        this.useCachedIcon(promoted)
+        lru.ns('apps').setItem(`appById_${this.appId$()}_icon`, promoted)
+      }
       this.finishRetry()
     },
-    async waitForOnline () {
+    async waitForOnline (appId = this.appId$()) {
+      const logPrefix = getAppIconLogPrefix(appId)
       try {
         await connectivityRetry.waitUntilOnline({ signal: runtime.abortController.signal })
       } catch (error) {
-        if (error?.name !== 'AbortError') console.error('Failed to resume app icon:', error)
+        if (error?.name !== 'AbortError') console.error(`${logPrefix} Failed to resume app icon:`, error)
       }
     },
     async retryCurrentWhenOnline () {
+      const appId = this.appId$()
+      const logPrefix = getAppIconLogPrefix(appId)
       try {
         await connectivityRetry.runWhenOnline(() => new Promise(resolve => {
           runtime.retryRelease = resolve
@@ -128,38 +211,77 @@ f('app-icon', ({ h, props }) => {
               return this.finishRetry()
             }
             image.src = candidate.url
+            this.startCandidateTimeout(image, candidate, this.iconIndex$())
           })
-        }), { signal: runtime.abortController.signal })
+        }), { signal: runtime.abortController.signal, logPrefix })
       } catch (error) {
-        if (error?.name !== 'AbortError') console.error('Failed to retry app icon:', error)
+        if (error?.name !== 'AbortError') console.error(`${logPrefix} Failed to retry app icon:`, error)
       }
     },
     async discoverFallbacks () {
       if (this.discoveryAttempted || this.htmlDiscovered$() || runtime.abortController.signal.aborted) return
+      const appId = this.appId$()
+      const canonicalAppId = getCanonicalAppId(appId)
+      const logPrefix = getAppIconLogPrefix(canonicalAppId)
       let online = false
       try {
         online = await connectivityRetry.confirmOnline()
       } catch (_) {}
       if (!online) {
-        await this.waitForOnline()
+        await this.waitForOnline(appId)
         if (!runtime.abortController.signal.aborted) return this.discoverFallbacks()
         return
       }
 
       this.discoveryAttempted = true
       this.isDiscovering$(true)
+      runtime.discoveryController?.abort()
+      const discoveryController = new AbortController()
+      runtime.discoveryController = discoveryController
+      let rejectLifecycleAbort
+      const lifecycleAbort = new Promise((_resolve, reject) => {
+        rejectLifecycleAbort = reject
+      })
+      const abortDiscovery = () => {
+        discoveryController.abort()
+        rejectLifecycleAbort(componentAbortError())
+      }
+      runtime.abortController.signal.addEventListener('abort', abortDiscovery, { once: true })
+      let terminalTimer
+      let terminalTimedOut = false
       try {
-        const icon = await connectivityRetry.run(
-          () => discoverHtmlIconFallbacks(this.appId$(), this.cachedIcon$()),
-          { signal: runtime.abortController.signal }
+        const discovery = connectivityRetry.run(
+          signal => discoverHtmlIconFallbacks(appId, this.cachedIcon$(), {
+            signal
+          }),
+          {
+            signal: discoveryController.signal,
+            timeoutMs: HTML_DISCOVERY_TIMEOUT_MS,
+            logPrefix
+          }
         )
+        // Promise.race consumes late rejections, so report non-abort failures explicitly.
+        discovery.catch(error => {
+          if (terminalTimedOut && error?.name !== 'AbortError') {
+            console.error(`${logPrefix} App icon discovery failed after its terminal timeout:`, error)
+          }
+        })
+        const terminalDeadline = new Promise((_resolve, reject) => {
+          terminalTimer = setTimeout(() => {
+            terminalTimedOut = true
+            const error = discoveryTimeoutError(canonicalAppId)
+            reject(error)
+            discoveryController.abort()
+          }, HTML_DISCOVERY_TERMINAL_TIMEOUT_MS)
+        })
+        const icon = await Promise.race([discovery, terminalDeadline, lifecycleAbort])
         if (!runtime.abortController.signal.aborted) {
           if (!icon.htmlDiscovered) {
             const online = await connectivityRetry.confirmOnline({ force: true })
             if (!online) {
               this.discoveryAttempted = false
               this.isDiscovering$(false)
-              await this.waitForOnline()
+              await this.waitForOnline(appId)
               if (!runtime.abortController.signal.aborted) return this.discoverFallbacks()
             } else {
               this.useCachedIcon(icon)
@@ -173,20 +295,22 @@ f('app-icon', ({ h, props }) => {
         }
       } catch (error) {
         if (error?.name !== 'AbortError') {
-          console.error('Failed to discover app icon fallbacks:', error)
+          console.error(`${logPrefix} Failed to discover app icon fallbacks:`, error)
           this.exhausted$(true)
         }
       } finally {
+        if (terminalTimer != null) clearTimeout(terminalTimer)
+        runtime.abortController.signal.removeEventListener('abort', abortDiscovery)
+        if (runtime.discoveryController === discoveryController) {
+          runtime.discoveryController = null
+        }
         if (!runtime.abortController.signal.aborted) this.isDiscovering$(false)
       }
     },
-    async showNextIcon (event) {
-      this.finishRetry()
-      const renderedIndex = Number(event.currentTarget.dataset.iconIndex)
+    async rejectCandidate (image, candidate, renderedIndex, { requireImageMatch = true } = {}) {
       if (renderedIndex !== this.iconIndex$()) return
-      const candidate = this.currentIcon$()
-      if (!candidate) return
-      if (!imageMatchesCandidate(event.currentTarget, candidate)) return
+      if (!candidate || this.currentIcon$()?.url !== candidate.url) return
+      if (requireImageMatch && !imageMatchesCandidate(image, candidate)) return
 
       if (!candidate.url.startsWith('data:')) {
         let online = false
@@ -194,7 +318,25 @@ f('app-icon', ({ h, props }) => {
         if (!online) return this.retryCurrentWhenOnline()
       }
 
+      if (renderedIndex !== this.iconIndex$() || this.currentIcon$()?.url !== candidate.url) return
+
       runtime.rejectedUrls.add(candidate.url)
+      if (runtime.upgradeCandidateUrl === candidate.url && this.displayedIcon$()) {
+        const equivalentIndex = getEquivalentAppIconCandidateIndex(
+          this.iconCandidates$(),
+          candidate,
+          runtime.rejectedUrls
+        )
+        if (equivalentIndex >= 0) {
+          runtime.upgradeCandidateUrl = this.iconCandidates$()[equivalentIndex].url
+          this.iconIndex$(equivalentIndex)
+          return
+        }
+        runtime.upgradeCandidateUrl = null
+        // Keep the already rendered layer visible; no second upgrade is attempted.
+        this.iconIndex$(this.iconCandidates$().length)
+        return
+      }
       const nextIndex = this.iconCandidates$().findIndex((next, index) =>
         index > renderedIndex && !runtime.rejectedUrls.has(next.url)
       )
@@ -204,6 +346,13 @@ f('app-icon', ({ h, props }) => {
       }
       if (!this.htmlDiscovered$()) await this.discoverFallbacks()
       else this.exhausted$(true)
+    },
+    async showNextIcon (event) {
+      this.finishRetry()
+      this.clearCandidateTimeout()
+      const renderedIndex = Number(event.currentTarget.dataset.iconIndex)
+      const candidate = this.currentIcon$()
+      await this.rejectCandidate(event.currentTarget, candidate, renderedIndex)
     }
   }))
 
@@ -223,9 +372,26 @@ f('app-icon', ({ h, props }) => {
     await store.discoverFallbacks()
   })
 
+  // Reused keyed images may already be complete and therefore emit no new event.
+  useTask(({ track, cleanup }) => {
+    const [icon, renderedIndex] = track(() => [store.currentIcon$(), store.iconIndex$()])
+    store.clearCandidateTimeout()
+    cleanup(store.clearCandidateTimeout)
+    const image = runtime.imageElement
+    if (!icon || !image || !image.isConnected) return
+    if (!image.complete || !imageMatchesCandidate(image, icon)) {
+      store.startCandidateTimeout(image, icon, renderedIndex)
+      return
+    }
+    if (image.naturalWidth > 0) store.markIconLoaded({ currentTarget: image })
+    else store.showNextIcon({ currentTarget: image })
+  }, { after: 'rendering' })
+
   useTask(({ cleanup }) => {
     cleanup(() => {
       store.finishRetry()
+      store.clearCandidateTimeout()
+      runtime.discoveryController?.abort()
       runtime.abortController.abort()
     })
   })

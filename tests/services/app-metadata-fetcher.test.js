@@ -9,9 +9,11 @@ import {
   discoverHtmlIconFallbacks,
   fetchAppMetadata,
   fetchFileFromChunks,
-  parseIrfsChunk
+  needsHtmlMetadataFallback,
+  parseIrfsChunk,
+  rankBlossomServers
 } from '#services/app-metadata-fetcher.js'
-import { resolveExternalImageUrl } from '#services/app-metadata.js'
+import { extractWebManifestIcons, resolveExternalImageUrl } from '#services/app-metadata.js'
 
 function sha256Hex (bytes) {
   return createHash('sha256').update(bytes).digest('hex')
@@ -28,9 +30,52 @@ describe('external app icon URLs', () => {
     assert.equal(resolveExternalImageUrl('javascript:alert(1)'), null)
     assert.equal(resolveExternalImageUrl('data:text/html,not-an-image'), null)
   })
+
+  it('keeps Web App Manifest author order instead of preferring the largest declaration', () => {
+    assert.deepEqual(extractWebManifestIcons({
+      icons: [
+        { src: 'compact.png', sizes: '64x64', purpose: 'any' },
+        { src: 'heavy.png', sizes: '1024x1024', purpose: 'any' }
+      ]
+    }), [
+      { href: 'compact.png', kind: 'web-app-manifest' },
+      { href: 'heavy.png', kind: 'web-app-manifest' }
+    ])
+  })
 })
 
 describe('app metadata fetcher v2', () => {
+  it('includes the canonical app ID in internal icon errors', async () => {
+    const ref = { dTag: 'logging', pubkey: 'a'.repeat(64), kind: 35128 }
+    const canonicalAppId = appEncode(ref)
+    const appId = appEncode({ ...ref, relays: ['wss://relay.test'] })
+    const consoleError = mock.method(console, 'error', () => {})
+    mock.method(nostrRelays, 'getEvents', async () => {
+      throw new Error('relay failure')
+    })
+
+    await fetchAppMetadata({
+      pubkey: ref.pubkey,
+      tags: [
+        ['service', 'irfs'],
+        ['r', 'f'.repeat(64), 'mark icon', 'm image/png']
+      ]
+    }, ['wss://relay.test'], { appId })
+
+    assert.equal(consoleError.mock.callCount(), 1)
+    assert.equal(
+      consoleError.mock.calls[0].arguments[0],
+      `[app-icon ${canonicalAppId}] Failed to resolve icon asset ${'f'.repeat(64)}:`
+    )
+  })
+
+  it('keeps HTML fallback discovery pending when a direct icon lacks listing metadata', () => {
+    const directIcon = { url: 'https://blossom.test/favicon' }
+    assert.equal(needsHtmlMetadataFallback({ icon: directIcon, name: null, description: null }), true)
+    assert.equal(needsHtmlMetadataFallback({ icon: directIcon, name: 'Hallway', description: 'An app' }), false)
+    assert.equal(needsHtmlMetadataFallback({ icon: null, name: 'Hallway', description: 'An app' }), true)
+  })
+
   it('validates an IRFS chunk proof and rejects content mutation', async () => {
     const mmr = new NMMR()
     await mmr.append(Uint8Array.of(1, 2, 3))
@@ -129,10 +174,13 @@ describe('app metadata fetcher v2', () => {
       icon: {
         fx: faviconRoot,
         url: `https://blossom.test/${faviconRoot}`,
+        source: 'manifest',
+        priority: 200,
         candidates: [{
           fx: faviconRoot,
           url: `https://blossom.test/${faviconRoot}`,
-          source: 'manifest'
+          source: 'manifest',
+          priority: 200
         }],
         manifestEventId: null,
         htmlRoot: indexRoot,
@@ -165,9 +213,49 @@ describe('app metadata fetcher v2', () => {
     assert.equal(fetchMock.mock.callCount(), 0)
   })
 
+  it('puts the first responsive Blossom server ahead of an earlier stalled server', async () => {
+    const root = 'e'.repeat(64)
+    mock.method(globalThis, 'fetch', (url, options) => {
+      if (url.startsWith('https://dead.test')) {
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      }
+      return Promise.resolve(new Response(null, { status: 200 }))
+    })
+    assert.deepEqual(await rankBlossomServers(
+      { root },
+      ['https://dead.test', 'https://healthy.test'],
+      { timeoutMs: 20 }
+    ), ['https://healthy.test', 'https://dead.test'])
+  })
+
+  it('can publish direct icon candidates without waiting for missing HTML metadata', async () => {
+    const root = 'd'.repeat(64)
+    const fetchMock = mock.method(globalThis, 'fetch', async () => {
+      throw new Error('HTML must remain deferred')
+    })
+    const metadata = await fetchAppMetadata({
+      pubkey: 'a'.repeat(64),
+      tags: [
+        ['service', 'blossom'],
+        ['name', 'Direct icon first'],
+        ['r', root, 'mark icon', 'm image/png'],
+        ['path', 'index.html', 'c'.repeat(64)]
+      ]
+    }, [], { blossomServers: ['https://blossom.test'], skipHtml: true })
+    assert.equal(metadata.icon.url, `https://blossom.test/${root}`)
+    assert.equal(metadata.icon.htmlDiscovered, false)
+    assert.equal(fetchMock.mock.callCount(), 0)
+  })
+
   it('orders marked icons, alternate Blossom servers and favicon fallbacks', async () => {
     const markedRoot = '1'.repeat(64)
     const faviconRoot = '2'.repeat(64)
+    mock.method(globalThis, 'fetch', async (_url, options) => {
+      assert.equal(options.method, 'HEAD')
+      return new Response(null, { status: 200 })
+    })
     const metadata = await fetchAppMetadata({
       pubkey: 'a'.repeat(64),
       tags: [
@@ -183,11 +271,13 @@ describe('app metadata fetcher v2', () => {
     assert.deepEqual(metadata.icon, {
       fx: markedRoot,
       url: `https://primary.test/${markedRoot}`,
+      source: 'manifest',
+      priority: 0,
       candidates: [
-        { fx: markedRoot, url: `https://primary.test/${markedRoot}`, source: 'manifest' },
-        { fx: markedRoot, url: `https://secondary.test/${markedRoot}`, source: 'manifest' },
-        { fx: faviconRoot, url: `https://primary.test/${faviconRoot}`, source: 'manifest' },
-        { fx: faviconRoot, url: `https://secondary.test/${faviconRoot}`, source: 'manifest' }
+        { fx: markedRoot, url: `https://primary.test/${markedRoot}`, source: 'manifest', priority: 0 },
+        { fx: markedRoot, url: `https://secondary.test/${markedRoot}`, source: 'manifest', priority: 0 },
+        { fx: faviconRoot, url: `https://primary.test/${faviconRoot}`, source: 'manifest', priority: 200 },
+        { fx: faviconRoot, url: `https://secondary.test/${faviconRoot}`, source: 'manifest', priority: 200 }
       ],
       manifestEventId: null,
       htmlRoot: null,
@@ -233,10 +323,10 @@ describe('app metadata fetcher v2', () => {
     }, [], { forceHtml: true })
 
     assert.deepEqual(metadata.icon.candidates, [
-      { fx: faviconRoot, url: `https://blossom.test/${faviconRoot}`, source: 'manifest' },
-      { fx: htmlIconRoot, url: `https://blossom.test/${htmlIconRoot}`, source: 'html' },
-      { fx: webManifestIconRoot, url: `https://blossom.test/${webManifestIconRoot}`, source: 'html' },
-      { fx: null, url: 'https://cdn.test/social.png', source: 'html' }
+      { fx: htmlIconRoot, url: `https://blossom.test/${htmlIconRoot}`, source: 'html', priority: 110 },
+      { fx: webManifestIconRoot, url: `https://blossom.test/${webManifestIconRoot}`, source: 'html', priority: 140 },
+      { fx: faviconRoot, url: `https://blossom.test/${faviconRoot}`, source: 'manifest', priority: 200 },
+      { fx: null, url: 'https://cdn.test/social.png', source: 'html', priority: 372 }
     ])
   })
 

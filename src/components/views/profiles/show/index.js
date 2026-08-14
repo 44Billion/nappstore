@@ -6,6 +6,7 @@ import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import nostrRelays, { sendEventReport } from '#services/nostr-relays.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import { getAppLauncherUrl } from '#helpers/launcher-url.js'
+import { getAppIconLogPrefix } from '#helpers/app.js'
 import { cssVars } from '#assets/styles/theme.js'
 import { useToast } from '#shared/toast.js'
 import lru from '#services/lru.js'
@@ -183,17 +184,24 @@ f('profilesShow', function () {
           })
           const cacheKey = `appById_${encodedApp}_icon`
           const iconCache = lru.ns('apps')
-          const metadata = await fetchAppMetadata(manifestEvent, writeRelays, {
-            blossomServers,
-            cachedIcon: iconCache.getItem(cacheKey)
-          })
+          let metadata
+          try {
+            metadata = await fetchAppMetadata(manifestEvent, writeRelays, {
+              blossomServers,
+              cachedIcon: iconCache.getItem(cacheKey),
+              appId: encodedApp
+            })
+          } catch (err) {
+            console.error(`${getAppIconLogPrefix(encodedApp)} Failed to fetch app metadata:`, err)
+            throw err
+          }
 
           // Cache the complete fallback chain for app-icon.
           if (metadata.icon) {
             try {
               iconCache.setItem(cacheKey, metadata.icon)
             } catch (err) {
-              console.error('Failed to cache icon:', err)
+              console.error(`${getAppIconLogPrefix(encodedApp)} Failed to cache icon:`, err)
             }
           }
 

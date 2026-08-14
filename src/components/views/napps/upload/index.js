@@ -16,6 +16,7 @@ import nostrRelays, { nappRelays, sendEventReport } from '#services/nostr-relays
 import { getRelays, getBlossomServersByPubkey } from '#helpers/nostr/queries.js'
 import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
 import { getAppLauncherUrl } from '#helpers/launcher-url.js'
+import { getAppIconLogPrefix } from '#helpers/app.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
 import '#shared/icons/icon-circle-number-1-filled.js'
@@ -138,7 +139,7 @@ f('nappsUpload', function () {
           try {
             lru.ns('apps').setItem(`appById_${encodedApp}_icon`, { url: faviconUrl })
           } catch (err) {
-            console.error('Failed to cache icon:', err)
+            console.error(`${getAppIconLogPrefix(encodedApp)} Failed to cache icon:`, err)
           }
         }
 
@@ -302,9 +303,10 @@ f('nappsUpload', function () {
       // Fetch metadata for each app
       const apps = await Promise.all(
         Object.values(appsByDTag).map(async (manifestEvent) => {
+          let encodedApp
           try {
             const dTag = manifestEvent.tags.find(t => t[0] === 'd')[1]
-            const encodedApp = appEncode({
+            encodedApp = appEncode({
               dTag,
               pubkey: manifestEvent.pubkey,
               kind: manifestEvent.kind
@@ -313,7 +315,8 @@ f('nappsUpload', function () {
             const iconCache = lru.ns('apps')
             const metadata = await fetchAppMetadata(manifestEvent, writeRelays, {
               blossomServers,
-              cachedIcon: iconCache.getItem(cacheKey)
+              cachedIcon: iconCache.getItem(cacheKey),
+              appId: encodedApp
             })
 
             // Cache the complete fallback chain for app-icon.
@@ -321,7 +324,7 @@ f('nappsUpload', function () {
               try {
                 iconCache.setItem(cacheKey, metadata.icon)
               } catch (err) {
-                console.error('Failed to cache icon:', err)
+                console.error(`${getAppIconLogPrefix(encodedApp)} Failed to cache icon:`, err)
               }
             }
 
@@ -336,7 +339,7 @@ f('nappsUpload', function () {
               uploadedAt: manifestEvent.created_at * 1000
             }
           } catch (err) {
-            console.error('Failed to fetch app metadata for manifest event:', err)
+            console.error(`${getAppIconLogPrefix(encodedApp)} Failed to fetch app metadata:`, err)
             return null
           }
         }).filter(Boolean)

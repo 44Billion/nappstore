@@ -2,6 +2,12 @@ import NMMR from 'nmmr'
 import { bytesToBase16 } from 'libp2r2p/base16'
 import { decode as base93Decode } from 'libp2r2p/base93'
 import { appDecode } from 'libp2r2p/nip19'
+import {
+  isValidPublicBlossomServerUrl,
+  isValidPublicRelayUrl,
+  normalizeBlossomServerUrl,
+  normalizeRelayUrl
+} from 'libp2r2p/url'
 import nostrRelays, { nappRelays } from '#services/nostr-relays.js'
 import { getBlossomServersByPubkey, getRelaysByPubkey } from '#helpers/nostr/queries.js'
 import {
@@ -12,15 +18,23 @@ import {
 } from '#services/app-metadata.js'
 import {
   findManifestPathAsset,
-  findMarkedManifestAssets,
-  getManifestAssets,
-  getManifestMetadata
+  getManifestMetadata,
+  getPreferredManifestIconAssets
 } from '#helpers/manifest.js'
 import { isRenderableAppIconUrl } from '#helpers/app-icon.js'
+import { getAppIconLogPrefix } from '#helpers/app.js'
 
 const CHUNK_BYTES = 51000
 const QUERY_BATCH_SIZE = 100
 const DEFAULT_METADATA_FILE_LIMIT = 5.5 * 1024 * 1024
+const BLOSSOM_PROBE_TIMEOUT_MS = 4000
+const BLOSSOM_FETCH_TIMEOUT_MS = 10000
+const ICON_PRIORITY = Object.freeze({
+  MARKED: 0,
+  HTML: 100,
+  CONVENTIONAL: 200,
+  SOCIAL: 300
+})
 const warnedSizeMismatches = new Set()
 const MAX_WARNED_SIZE_MISMATCHES = 1000
 
@@ -77,14 +91,14 @@ function parseIrfsChunk (event, root) {
   return { contentBytes, index, total }
 }
 
-async function queryChunkBatch ({ pubkey, root, indexes, relays }) {
+async function queryChunkBatch ({ pubkey, root, indexes, relays, signal }) {
   const dByIndex = new Map(indexes.map(index => [index, NMMR.deriveChunkId(root, index)]))
   const { result: events } = await nostrRelays.getEvents({
     kinds: [34601],
     authors: [pubkey],
     '#d': [...dByIndex.values()],
     limit: indexes.length
-  }, relays)
+  }, relays, { signal })
   const byIndex = new Map()
   for (const event of deduplicateEvents(events)) {
     try {
@@ -96,11 +110,12 @@ async function queryChunkBatch ({ pubkey, root, indexes, relays }) {
 }
 
 // Fetches and validates an entire IRFS v2 blob in bounded relay-query batches.
-async function fetchFileFromChunks (pubkey, root, relays, { maxSizeBytes = null, size = null } = {}) {
+async function fetchFileFromChunks (pubkey, root, relays, { maxSizeBytes = null, size = null, signal } = {}) {
   if (!/^[0-9a-f]{64}$/.test(root)) return null
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
   const advertisedSize = Number.isSafeInteger(size) && size >= 0 ? size : null
 
-  const first = await queryChunkBatch({ pubkey, root, indexes: [0], relays })
+  const first = await queryChunkBatch({ pubkey, root, indexes: [0], relays, signal })
   const firstChunk = first.get(0)
   if (!firstChunk) return null
   const total = firstChunk.total
@@ -110,9 +125,10 @@ async function fetchFileFromChunks (pubkey, root, relays, { maxSizeBytes = null,
   const chunks = new Array(total)
   chunks[0] = firstChunk.contentBytes
   for (let offset = 1; offset < total; offset += QUERY_BATCH_SIZE) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     const end = Math.min(total, offset + QUERY_BATCH_SIZE)
     const indexes = Array.from({ length: end - offset }, (_, index) => offset + index)
-    const batch = await queryChunkBatch({ pubkey, root, indexes, relays })
+    const batch = await queryChunkBatch({ pubkey, root, indexes, relays, signal })
     for (const index of indexes) {
       const chunk = batch.get(index)
       if (!chunk || chunk.total !== total) return null
@@ -156,16 +172,70 @@ async function readResponseBytes (response, maxSizeBytes) {
   return bytes
 }
 
-async function fetchFromBlossom (asset, blossomServers, maxSizeBytes = null) {
-  for (const server of blossomServers || []) {
+async function fetchWithTimeout (url, { signal, timeoutMs, ...options } = {}) {
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+// Puts a responsive server first without waiting for an earlier dead host.
+export async function rankBlossomServers (asset, blossomServers, {
+  signal,
+  timeoutMs = BLOSSOM_PROBE_TIMEOUT_MS
+} = {}) {
+  const servers = [...new Set((blossomServers || []).flatMap(server => {
+    try { return [normalizeBlossomServerUrl(server)] } catch (_) { return [] }
+  }))]
+  if (servers.length < 2) return servers
+
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  try {
+    const winner = await Promise.any(servers.map(async server => {
+      const response = await fetchWithTimeout(`${server}/${asset.root}`, {
+        method: 'HEAD',
+        signal: controller.signal,
+        timeoutMs
+      })
+      if (!response.ok) throw new Error(`Blossom HEAD returned ${response.status}`)
+      return server
+    }))
+    controller.abort()
+    return [winner, ...servers.filter(server => server !== winner)]
+  } catch (_error) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    return servers
+  } finally {
+    controller.abort()
+    signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+async function fetchFromBlossom (asset, blossomServers, maxSizeBytes = null, signal) {
+  const servers = await rankBlossomServers(asset, blossomServers, { signal })
+  for (const server of servers) {
     try {
-      const response = await fetch(`${server.replace(/\/$/, '')}/${asset.root}`)
+      const response = await fetchWithTimeout(`${server}/${asset.root}`, {
+        signal,
+        timeoutMs: BLOSSOM_FETCH_TIMEOUT_MS
+      })
       if (!response.ok) continue
       const bytes = await readResponseBytes(response, maxSizeBytes)
       if (!bytes || await sha256Hex(bytes) !== asset.root) continue
       warnSizeMismatch('blossom', asset.root, asset.size, bytes.length)
       return bytes
-    } catch (_) {}
+    } catch (error) {
+      if (signal?.aborted) throw error
+    }
   }
   return null
 }
@@ -192,62 +262,92 @@ function chunksToDataUrl (binaryChunks, mimeType) {
 }
 
 // Fetches a validated IRFS asset and converts it to a data URL.
-export async function fetchFileDataUrl ({ pubkey, rootHash, relays, mimeType, size = null, maxSizeBytes = null }) {
+export async function fetchFileDataUrl ({
+  pubkey, rootHash, relays, mimeType, size = null, maxSizeBytes = null, signal
+}) {
   if (!pubkey || !rootHash || !Array.isArray(relays) || !relays.length) return null
   try {
-    const chunks = await fetchFileFromChunks(pubkey, rootHash, relays, { maxSizeBytes, size })
+    const chunks = await fetchFileFromChunks(pubkey, rootHash, relays, { maxSizeBytes, size, signal })
     return chunks ? chunksToDataUrl(chunks, mimeType || 'application/octet-stream') : null
   } catch (error) {
+    if (signal?.aborted) throw error
     console.error('Error fetching file data URL:', error)
     return null
   }
 }
 
-async function assetBytes (asset, pubkey, relays, blossomServers, maxSizeBytes) {
+async function assetBytes (asset, pubkey, relays, blossomServers, maxSizeBytes, signal) {
   if (asset.service === 'blossom') {
-    const bytes = await fetchFromBlossom(asset, blossomServers, maxSizeBytes)
+    const bytes = await fetchFromBlossom(asset, blossomServers, maxSizeBytes, signal)
     return bytes ? [bytes] : null
   }
-  return fetchFileFromChunks(pubkey, asset.root, relays, { maxSizeBytes, size: asset.size })
+  return fetchFileFromChunks(pubkey, asset.root, relays, { maxSizeBytes, size: asset.size, signal })
 }
 
 function manifestHints (manifestEvent, tagName) {
   return (Array.isArray(manifestEvent?.tags) ? manifestEvent.tags : [])
     .filter(tag => Array.isArray(tag) && tag[0] === tagName && typeof tag[1] === 'string')
-    .map(tag => tag[1].trim())
-    .filter(Boolean)
+    .flatMap(tag => {
+      try {
+        if (tagName === 'relay') {
+          return isValidPublicRelayUrl(tag[1]) ? [normalizeRelayUrl(tag[1])] : []
+        }
+        return isValidPublicBlossomServerUrl(tag[1]) ? [normalizeBlossomServerUrl(tag[1])] : []
+      } catch (_) {
+        return []
+      }
+    })
 }
 
 // Adds an asset entry once while preserving discovery order.
-function addAssetEntry (entries, seenAssets, asset, source = 'manifest') {
+function addAssetEntry (entries, seenAssets, asset, source = 'manifest', priority = ICON_PRIORITY.CONVENTIONAL) {
   if (!asset) return
   const key = `${asset.service}:${asset.root}`
   if (seenAssets.has(key)) return
   seenAssets.add(key)
-  entries.push({ asset, source })
+  entries.push({ asset, source, priority })
 }
 
 // Resolves every usable icon URL while preserving asset and server priority.
-async function resolveIconCandidates (entries, manifestEvent, relays, blossomServers, cachedIcon) {
+async function resolveIconCandidates (
+  entries,
+  manifestEvent,
+  relays,
+  blossomServers,
+  cachedIcon,
+  signal,
+  logPrefix
+) {
   const candidates = []
   const seenUrls = new Set()
   const cachedCandidates = normalizeCachedIconCandidates(cachedIcon)
+  const firstBlossomAsset = entries.find(entry => entry.asset?.service === 'blossom')?.asset
+  let orderedBlossomServers = blossomServers
+  if (firstBlossomAsset) {
+    const cached = cachedCandidates.find(candidate => candidate.fx === firstBlossomAsset.root)
+    const cachedServer = blossomServers.find(server =>
+      cached?.url === `${server}/${firstBlossomAsset.root}`
+    )
+    orderedBlossomServers = cachedServer
+      ? [cachedServer, ...blossomServers.filter(server => server !== cachedServer)]
+      : await rankBlossomServers(firstBlossomAsset, blossomServers, { signal })
+  }
   for (const entry of entries) {
     if (entry.candidate) {
       if (!seenUrls.has(entry.candidate.url)) {
         seenUrls.add(entry.candidate.url)
-        candidates.push({ ...entry.candidate, source: entry.source })
+        candidates.push({ ...entry.candidate, source: entry.source, priority: entry.priority })
       }
       continue
     }
 
-    const { asset, source } = entry
+    const { asset, source, priority } = entry
     if (asset.service === 'blossom') {
-      for (const server of blossomServers) {
-        const url = `${server.replace(/\/$/, '')}/${asset.root}`
+      for (const server of orderedBlossomServers) {
+        const url = `${server}/${asset.root}`
         if (seenUrls.has(url)) continue
         seenUrls.add(url)
-        candidates.push({ fx: asset.root, url, source })
+        candidates.push({ fx: asset.root, url, source, priority })
       }
       continue
     }
@@ -256,22 +356,24 @@ async function resolveIconCandidates (entries, manifestEvent, relays, blossomSer
       const cached = cachedCandidates.find(candidate => candidate.fx === asset.root)
       if (cached && !seenUrls.has(cached.url)) {
         seenUrls.add(cached.url)
-        candidates.push({ ...cached, source })
+        candidates.push({ ...cached, source, priority })
         continue
       }
       const chunks = await fetchFileFromChunks(manifestEvent.pubkey, asset.root, relays, {
         maxSizeBytes: DEFAULT_METADATA_FILE_LIMIT,
-        size: asset.size
+        size: asset.size,
+        signal
       })
       if (!chunks) continue
       const mimeType = asset.mimeType || 'image/png'
       const url = await chunksToDataUrl(chunks, mimeType)
       if (!seenUrls.has(url)) {
         seenUrls.add(url)
-        candidates.push({ fx: asset.root, url, source })
+        candidates.push({ fx: asset.root, url, source, priority })
       }
     } catch (error) {
-      console.error(`Failed to resolve icon asset ${asset.root}:`, error)
+      if (signal?.aborted) throw error
+      console.error(`${logPrefix} Failed to resolve icon asset ${asset.root}:`, error)
     }
   }
   return candidates
@@ -286,7 +388,9 @@ async function addHtmlIconEntries ({
   indexPath,
   manifestEvent,
   relays,
-  blossomServers
+  blossomServers,
+  signal,
+  logPrefix
 }) {
   for (const source of sources) {
     const path = resolveAppPath(source.href, indexPath, htmlMetadata.baseHref)
@@ -300,31 +404,51 @@ async function addHtmlIconEntries ({
           manifestEvent.pubkey,
           relays,
           blossomServers,
-          DEFAULT_METADATA_FILE_LIMIT
+          DEFAULT_METADATA_FILE_LIMIT,
+          signal
         )
         if (!bytes) continue
         for (const icon of extractWebManifestIcons(chunksToText(bytes))) {
           const iconPath = resolveAppPath(icon.href, path)
           const iconAsset = iconPath && findManifestPathAsset(manifestEvent, candidate => candidate === iconPath)
           if (iconAsset) {
-            addAssetEntry(entries, seenAssets, iconAsset, 'html')
+            addAssetEntry(entries, seenAssets, iconAsset, 'html', ICON_PRIORITY.HTML + source.priority)
           } else {
             const url = resolveExternalImageUrl(icon.href)
-            if (url) entries.push({ candidate: { fx: null, url }, source: 'html' })
+            if (url) {
+              entries.push({
+                candidate: { fx: null, url },
+                source: 'html',
+                priority: ICON_PRIORITY.HTML + source.priority
+              })
+            }
           }
         }
       } catch (error) {
-        console.error('Failed to read Web App Manifest icons:', error)
+        if (signal?.aborted) throw error
+        console.error(`${logPrefix} Failed to read Web App Manifest icons:`, error)
       }
       continue
     }
 
     if (asset) {
-      addAssetEntry(entries, seenAssets, asset, 'html')
+      const basePriority = ['tile-image', 'social-image'].includes(source.kind)
+        ? ICON_PRIORITY.SOCIAL
+        : ICON_PRIORITY.HTML
+      addAssetEntry(entries, seenAssets, asset, 'html', basePriority + source.priority)
       continue
     }
     const url = resolveExternalImageUrl(source.href, htmlMetadata.baseHref)
-    if (url) entries.push({ candidate: { fx: null, url }, source: 'html' })
+    if (url) {
+      const basePriority = ['tile-image', 'social-image'].includes(source.kind)
+        ? ICON_PRIORITY.SOCIAL
+        : ICON_PRIORITY.HTML
+      entries.push({
+        candidate: { fx: null, url },
+        source: 'html',
+        priority: basePriority + source.priority
+      })
+    }
   }
 }
 
@@ -338,18 +462,25 @@ function normalizeCachedIconCandidates (icon) {
     return [{
       fx: typeof candidate.fx === 'string' ? candidate.fx : null,
       url: candidate.url,
-      source: candidate.source === 'html' ? 'html' : 'manifest'
+      source: candidate.source === 'html' ? 'html' : 'manifest',
+      priority: Number.isFinite(candidate.priority)
+        ? candidate.priority
+        : candidate.source === 'html' ? ICON_PRIORITY.HTML : ICON_PRIORITY.CONVENTIONAL
     }]
   })
 }
 
 function mergeCandidates (...groups) {
   const seen = new Set()
-  return groups.flat().filter(candidate => {
-    if (!isRenderableAppIconUrl(candidate?.url) || seen.has(candidate.url)) return false
-    seen.add(candidate.url)
-    return true
-  })
+  return groups.flat()
+    .filter(candidate => {
+      if (!isRenderableAppIconUrl(candidate?.url) || seen.has(candidate.url)) return false
+      seen.add(candidate.url)
+      return true
+    })
+    .map((candidate, index) => ({ candidate, index }))
+    .sort((left, right) => left.candidate.priority - right.candidate.priority || left.index - right.index)
+    .map(({ candidate }) => candidate)
 }
 
 // Keeps the primary icon shape compatible while recording discovery freshness.
@@ -358,6 +489,8 @@ function createIconMetadata (candidates, manifestEvent, indexAsset, htmlDiscover
   return {
     fx: first.fx,
     url: first.url,
+    ...(first.source ? { source: first.source } : {}),
+    ...(Number.isFinite(first.priority) ? { priority: first.priority } : {}),
     candidates,
     manifestEventId: manifestEvent.id || null,
     htmlRoot: indexAsset?.root || null,
@@ -367,24 +500,21 @@ function createIconMetadata (candidates, manifestEvent, indexAsset, htmlDiscover
   }
 }
 
-function getManifestIconAssets (manifestEvent) {
-  const marked = findMarkedManifestAssets(manifestEvent, 'icon')
-  const seenRoots = new Set(marked.map(asset => asset.root))
-  const favicons = getManifestAssets(manifestEvent).flatMap(asset => {
-    const path = asset.paths.find(path =>
-      /^favicon\.(ico|svg|webp|png|jpg|jpeg|gif|avif)$/i.test(path.split('/').pop())
-    )
-    return path && !seenRoots.has(asset.root) ? [{ ...asset, path }] : []
-  })
-  return [...marked, ...favicons]
+// Missing listing metadata keeps HTML discovery relevant even when a direct icon exists.
+export function needsHtmlMetadataFallback (metadata) {
+  return !metadata?.icon?.url || !metadata?.name || !metadata?.description
 }
 
 // Reads direct metadata first and discovers HTML only when it is needed.
 export async function fetchAppMetadata (manifestEvent, relays, {
   blossomServers,
   cachedIcon = null,
-  forceHtml = false
+  forceHtml = false,
+  skipHtml = false,
+  signal,
+  appId = null
 } = {}) {
+  const logPrefix = getAppIconLogPrefix(appId)
   const effectiveRelays = [...new Set([
     ...manifestHints(manifestEvent, 'relay'),
     ...(Array.isArray(relays) ? relays : [])
@@ -401,10 +531,18 @@ export async function fetchAppMetadata (manifestEvent, relays, {
   }
 
   const indexAsset = findManifestPathAsset(manifestEvent, path => path === 'index.html' || path === 'index.htm')
-  const manifestAssets = getManifestIconAssets(manifestEvent)
+  const manifestAssets = getPreferredManifestIconAssets(manifestEvent)
   const entries = []
   const seenAssets = new Set()
-  for (const asset of manifestAssets) addAssetEntry(entries, seenAssets, asset)
+  const iconWasAutomaticallySelected = manifestEvent.tags?.some(tag =>
+    Array.isArray(tag) && tag[0] === 'auto' && tag[1] === 'icon'
+  )
+  for (const asset of manifestAssets) {
+    const priority = !iconWasAutomaticallySelected && asset.marks.includes('icon')
+      ? ICON_PRIORITY.MARKED
+      : ICON_PRIORITY.CONVENTIONAL
+    addAssetEntry(entries, seenAssets, asset, 'manifest', priority)
+  }
 
   let directCandidates = []
   try {
@@ -413,10 +551,13 @@ export async function fetchAppMetadata (manifestEvent, relays, {
       manifestEvent,
       effectiveRelays,
       effectiveBlossomServers,
-      cachedIcon
+      cachedIcon,
+      signal,
+      logPrefix
     )
   } catch (error) {
-    console.error('Error resolving manifest icon candidates:', error)
+    if (signal?.aborted) throw error
+    console.error(`${logPrefix} Error resolving manifest icon candidates:`, error)
   }
 
   const cachedHtmlCandidates = cachedIcon?.htmlDiscovered && cachedIcon.htmlRoot === (indexAsset?.root || null)
@@ -432,7 +573,7 @@ export async function fetchAppMetadata (manifestEvent, relays, {
   let discoveredHtmlMetadata = canReuseHtml
     ? { name: cachedIcon.htmlName, description: cachedIcon.htmlDescription }
     : null
-  const shouldReadHtml = forceHtml || !metadata.name || !metadata.description || manifestAssets.length === 0
+  const shouldReadHtml = !skipHtml && (forceHtml || !metadata.name || !metadata.description || manifestAssets.length === 0)
 
   if (shouldReadHtml && !htmlDiscovered) {
     if (!indexAsset) {
@@ -444,7 +585,8 @@ export async function fetchAppMetadata (manifestEvent, relays, {
           manifestEvent.pubkey,
           effectiveRelays,
           effectiveBlossomServers,
-          DEFAULT_METADATA_FILE_LIMIT
+          DEFAULT_METADATA_FILE_LIMIT,
+          signal
         )
         if (chunks) {
           const htmlMetadata = extractHtmlMetadata(chunksToText(chunks))
@@ -462,7 +604,9 @@ export async function fetchAppMetadata (manifestEvent, relays, {
             indexPath: indexAsset.path || 'index.html',
             manifestEvent,
             relays: effectiveRelays,
-            blossomServers: effectiveBlossomServers
+            blossomServers: effectiveBlossomServers,
+            signal,
+            logPrefix
           }
           await addHtmlIconEntries({ ...sourceOptions, sources: specificSources })
           await addHtmlIconEntries({ ...sourceOptions, sources: socialSources })
@@ -471,12 +615,15 @@ export async function fetchAppMetadata (manifestEvent, relays, {
             manifestEvent,
             effectiveRelays,
             effectiveBlossomServers,
-            cachedIcon
+            cachedIcon,
+            signal,
+            logPrefix
           )
           htmlDiscovered = true
         }
       } catch (error) {
-        console.error('Error fetching HTML app metadata:', error)
+        if (signal?.aborted) throw error
+        console.error(`${logPrefix} Error fetching HTML app metadata:`, error)
       }
     }
   }
@@ -495,6 +642,7 @@ const htmlDiscoveryByAppId = new Map()
 
 // Refetches one current manifest and expands its HTML icon fallbacks on demand.
 export function discoverHtmlIconFallbacks (appId, cachedIcon, {
+  signal,
   _getRelaysByPubkey = getRelaysByPubkey,
   _getBlossomServersByPubkey = getBlossomServersByPubkey,
   _nostrRelays = nostrRelays
@@ -502,10 +650,10 @@ export function discoverHtmlIconFallbacks (appId, cachedIcon, {
   if (htmlDiscoveryByAppId.has(appId)) return htmlDiscoveryByAppId.get(appId)
   const request = (async () => {
     const { dTag, pubkey, kind } = appDecode(appId)
-    const [relaysByAuthor, blossomServersByAuthor] = await Promise.all([
-      _getRelaysByPubkey([pubkey]),
-      _getBlossomServersByPubkey([pubkey])
-    ])
+    const relaysByAuthor = await _getRelaysByPubkey([pubkey])
+    const blossomServersByAuthor = await _getBlossomServersByPubkey([pubkey], {
+      _getRelaysByPubkey: async () => relaysByAuthor
+    })
     const relays = [...new Set([
       ...(relaysByAuthor[pubkey]?.write || []),
       ...nappRelays
@@ -514,13 +662,15 @@ export function discoverHtmlIconFallbacks (appId, cachedIcon, {
       kinds: [kind],
       authors: [pubkey],
       '#d': [dTag]
-    }, relays)
+    }, relays, { signal })
     const manifestEvent = result.sort((left, right) => right.created_at - left.created_at)[0]
     if (!manifestEvent) throw new Error('App manifest not found while discovering icon fallbacks')
     const metadata = await fetchAppMetadata(manifestEvent, relays, {
       blossomServers: blossomServersByAuthor[pubkey] || [],
       cachedIcon,
-      forceHtml: true
+      forceHtml: true,
+      signal,
+      appId
     })
     return metadata.icon
   })().finally(() => htmlDiscoveryByAppId.delete(appId))

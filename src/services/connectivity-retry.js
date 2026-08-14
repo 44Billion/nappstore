@@ -8,6 +8,12 @@ function abortError () {
   return error
 }
 
+function timeoutError (timeoutMs) {
+  const error = new Error(`Task timed out after ${timeoutMs}ms`)
+  error.name = 'TimeoutError'
+  return error
+}
+
 // Coordinates connectivity checks and resumed work across every mounted icon.
 export class ConnectivityRetryCoordinator {
   constructor ({
@@ -20,8 +26,9 @@ export class ConnectivityRetryCoordinator {
   } = {}) {
     this._isOnline = _isOnline
     this._onOnline = _onOnline
-    this._setTimeout = _setTimeout
-    this._clearTimeout = _clearTimeout
+    // Browser timer functions require the global object as their receiver.
+    this._setTimeout = (...args) => Reflect.apply(_setTimeout, globalThis, args)
+    this._clearTimeout = (...args) => Reflect.apply(_clearTimeout, globalThis, args)
     this._random = _random
     this.concurrency = concurrency
   }
@@ -69,17 +76,17 @@ export class ConnectivityRetryCoordinator {
   }
 
   // Runs resumed work with a global concurrency cap.
-  run (task, { signal } = {}) {
+  run (task, { signal, timeoutMs, logPrefix } = {}) {
     if (signal?.aborted) return Promise.reject(abortError())
     return new Promise((resolve, reject) => {
-      this.queue.push({ task, signal, resolve, reject })
+      this.queue.push({ task, signal, resolve, reject, timeoutMs, logPrefix })
       this.#drainQueue()
     })
   }
 
-  async runWhenOnline (task, { signal } = {}) {
+  async runWhenOnline (task, { signal, logPrefix } = {}) {
     await this.waitUntilOnline({ signal })
-    return this.run(task, { signal })
+    return this.run(task, { signal, logPrefix })
   }
 
   #startMonitor () {
@@ -128,13 +135,55 @@ export class ConnectivityRetryCoordinator {
         continue
       }
       this.running++
-      Promise.resolve()
-        .then(item.task)
-        .then(item.resolve, item.reject)
-        .finally(() => {
+      let taskController = null
+      let abortTask = null
+      let timedOut = false
+      let timer = null
+      let released = false
+      const release = () => {
+        if (released) return
+        released = true
+        try {
+          if (timer != null) this._clearTimeout(timer)
+        } catch (error) {
+          console.error(`${item.logPrefix ? `${item.logPrefix} ` : ''}Failed to clear connectivity retry timer:`, error)
+        }
+        try {
+          item.signal?.removeEventListener('abort', abortTask)
+        } catch (error) {
+          console.error(`${item.logPrefix ? `${item.logPrefix} ` : ''}Failed to remove connectivity retry listener:`, error)
+        } finally {
           this.running--
           this.#drainQueue()
+        }
+      }
+
+      try {
+        taskController = new AbortController()
+        abortTask = () => taskController.abort()
+        item.signal?.addEventListener('abort', abortTask, { once: true })
+        if (item.timeoutMs != null && item.timeoutMs > 0) {
+          timer = this._setTimeout(() => {
+            // Release the shared slot even if a browser request ignores abort.
+            timedOut = true
+            taskController.abort()
+            item.reject(timeoutError(item.timeoutMs))
+            release()
+          }, item.timeoutMs)
+        }
+      } catch (error) {
+        taskController?.abort()
+        item.reject(error)
+        release()
+        continue
+      }
+
+      Promise.resolve()
+        .then(() => {
+          if (!timedOut) return item.task(taskController.signal)
         })
+        .then(item.resolve, item.reject)
+        .finally(release)
     }
   }
 }

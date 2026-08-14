@@ -1,5 +1,6 @@
 const ROOT_HASH = /^[0-9a-f]{64}$/
 const MARKS = new Set(['icon', 'key_art', 'screenshot'])
+const ICON_BASENAME = /^(?:favicon(?:[-_.]\w+)*|apple-touch-icon(?:-precomposed|[-_.]\w+)*)\.(?:ico|svg|webp|png|jpg|jpeg|gif|avif)$/i
 
 // Normalizes one optional leading slash and rejects unsafe route segments.
 export function normalizeManifestPath (value) {
@@ -84,6 +85,59 @@ export function findMarkedManifestAsset (manifest, mark) {
 export function findMarkedManifestAssets (manifest, mark) {
   if (!MARKS.has(mark)) return []
   return getManifestAssets(manifest).filter(asset => asset.marks.includes(mark))
+}
+
+function iconPathQuality (path) {
+  const filename = path.split('/').pop()
+  if (/\.svg$/i.test(filename)) return 1000000
+  const dimensions = [...filename.matchAll(/(?:^|[-_.])(\d{2,5})x(\d{2,5})(?=[-_.]|$)/gi)]
+    .map(match => Math.min(Number(match[1]), Number(match[2])))
+  if (dimensions.length) return Math.max(...dimensions)
+  if (/^apple-touch-icon/i.test(filename)) return 180
+  if (/\.ico$/i.test(filename)) return 32
+  return 1
+}
+
+// Preserves explicit icon marks while improving automatically selected legacy icons.
+export function getPreferredManifestIconAssets (manifest) {
+  const assets = getManifestAssets(manifest)
+  const pathsByRoot = new Map()
+  for (const asset of assets) {
+    const paths = pathsByRoot.get(asset.root) || []
+    for (const path of asset.paths) {
+      if (!paths.includes(path)) paths.push(path)
+    }
+    pathsByRoot.set(asset.root, paths)
+  }
+
+  const entries = []
+  const seenRoots = new Set()
+  const add = asset => {
+    if (!asset || seenRoots.has(asset.root)) return
+    seenRoots.add(asset.root)
+    entries.push({
+      ...asset,
+      paths: [...new Set([...asset.paths, ...(pathsByRoot.get(asset.root) || [])])]
+    })
+  }
+  for (const asset of assets.filter(asset => asset.marks.includes('icon'))) add(asset)
+  for (const asset of assets) {
+    if (asset.paths.some(path => ICON_BASENAME.test(path.split('/').pop()))) add(asset)
+  }
+
+  const isAutoIcon = manifest?.tags?.some(tag =>
+    Array.isArray(tag) && tag[0] === 'auto' && tag[1] === 'icon'
+  )
+  if (!isAutoIcon) return entries
+
+  return entries
+    .map((asset, index) => ({
+      asset,
+      index,
+      quality: Math.max(0, ...asset.paths.map(iconPathQuality))
+    }))
+    .sort((left, right) => right.quality - left.quality || left.index - right.index)
+    .map(entry => entry.asset)
 }
 
 // Finds the first routed asset accepted by a path predicate.

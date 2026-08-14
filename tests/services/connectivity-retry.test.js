@@ -103,4 +103,66 @@ describe('connectivity retry coordinator', () => {
     onlineHandler()
     await surviving
   })
+
+  it('releases a concurrency slot when a task exceeds its limit', async () => {
+    const timers = []
+    const coordinator = new ConnectivityRetryCoordinator({
+      concurrency: 1,
+      _setTimeout: (handler, delay) => {
+        const timer = { handler, delay, cleared: false }
+        timers.push(timer)
+        return timer
+      },
+      _clearTimeout: timer => { timer.cleared = true }
+    })
+    const stalled = coordinator.run(() => new Promise(() => {}), { timeoutMs: 15 })
+    let secondRan = false
+    const second = coordinator.run(() => { secondRan = true })
+    await Promise.resolve()
+    assert.equal(secondRan, false)
+    assert.equal(timers[0].delay, 15)
+    timers[0].handler()
+    await assert.rejects(stalled, { name: 'TimeoutError' })
+    await second
+    assert.equal(secondRan, true)
+  })
+
+  it('calls browser-style timer functions with the global receiver', async () => {
+    const timer = { cleared: false }
+    const coordinator = new ConnectivityRetryCoordinator({
+      _setTimeout: function () {
+        assert.equal(this, globalThis)
+        return timer
+      },
+      _clearTimeout: function (receivedTimer) {
+        assert.equal(this, globalThis)
+        assert.equal(receivedTimer, timer)
+        timer.cleared = true
+      }
+    })
+
+    await coordinator.run(() => {}, { timeoutMs: 15 })
+    await Promise.resolve()
+    assert.equal(timer.cleared, true)
+  })
+
+  it('does not lose a concurrency slot when timer setup throws', async () => {
+    let timerAttempts = 0
+    const coordinator = new ConnectivityRetryCoordinator({
+      concurrency: 1,
+      _setTimeout: () => {
+        timerAttempts++
+        throw new TypeError('Illegal invocation')
+      }
+    })
+    const failed = coordinator.run(() => {}, { timeoutMs: 15 })
+    let secondRan = false
+    const second = coordinator.run(() => { secondRan = true })
+
+    await assert.rejects(failed, /Illegal invocation/)
+    await second
+    assert.equal(timerAttempts, 1)
+    assert.equal(secondRan, true)
+    assert.equal(coordinator.running, 0)
+  })
 })

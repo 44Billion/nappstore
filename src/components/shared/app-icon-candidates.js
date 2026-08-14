@@ -3,6 +3,14 @@ import { appIconMonogramPalettes } from '#assets/styles/theme.js'
 
 export { appIconMonogramPalettes }
 
+const DEFAULT_MANIFEST_ICON_PRIORITY = 200
+const DEFAULT_HTML_ICON_PRIORITY = 100
+
+function getCandidatePriority (candidate) {
+  if (Number.isFinite(candidate?.priority)) return candidate.priority
+  return candidate?.source === 'html' ? DEFAULT_HTML_ICON_PRIORITY : DEFAULT_MANIFEST_ICON_PRIORITY
+}
+
 // Splits text by user-perceived characters when the platform supports it.
 function getGraphemes (value) {
   if (typeof Intl.Segmenter === 'function') {
@@ -60,9 +68,30 @@ export function normalizeAppIconCandidates (icon) {
     return [{
       fx: typeof candidate.fx === 'string' ? candidate.fx : null,
       url,
-      source: candidate.source === 'html' ? 'html' : 'manifest'
+      source: candidate.source === 'html' ? 'html' : 'manifest',
+      ...(Number.isFinite(candidate.priority) ? { priority: candidate.priority } : {})
     }]
   })
+}
+
+// Makes a confirmed candidate the durable first choice while retaining fallbacks.
+export function promoteAppIconCandidate (icon, candidate) {
+  if (!candidate || !isRenderableAppIconUrl(candidate.url)) return icon
+  const promoted = {
+    fx: typeof candidate.fx === 'string' ? candidate.fx : null,
+    url: candidate.url,
+    source: candidate.source === 'html' ? 'html' : 'manifest',
+    ...(Number.isFinite(candidate.priority) ? { priority: candidate.priority } : {})
+  }
+  const candidates = [
+    promoted,
+    ...normalizeAppIconCandidates(icon).filter(entry => entry.url !== promoted.url)
+  ]
+  return {
+    ...(icon && typeof icon === 'object' ? icon : {}),
+    ...promoted,
+    candidates
+  }
 }
 
 // Selects the first non-rejected candidate and identifies terminal discovery states.
@@ -95,6 +124,30 @@ export function reconcileAppIconCandidates (candidates, displayedIcon, rejectedU
   return { candidates, index: index < 0 ? candidates.length : index }
 }
 
+// Chooses one metadata-preferred upgrade without switching between servers for the same asset.
+export function getAppIconUpgradeIndex (
+  candidates,
+  displayedIcon,
+  rejectedUrls,
+  { discoveryComplete = false, upgradeAttempted = false } = {}
+) {
+  if (!discoveryComplete || upgradeAttempted || !displayedIcon || candidates.length === 0) return -1
+  const preferred = candidates.reduce((best, candidate) =>
+    getCandidatePriority(candidate) < getCandidatePriority(best) ? candidate : best
+  )
+  if (preferred.url === displayedIcon.url || rejectedUrls.has(preferred.url)) return -1
+  if (preferred.fx && displayedIcon.fx && preferred.fx === displayedIcon.fx) return -1
+  return candidates.findIndex(candidate => candidate.url === preferred.url)
+}
+
+// Finds another server URL for the same preferred asset without changing quality tiers.
+export function getEquivalentAppIconCandidateIndex (candidates, candidate, rejectedUrls) {
+  if (!candidate?.fx) return -1
+  return candidates.findIndex(next =>
+    next.fx === candidate.fx && !rejectedUrls.has(next.url)
+  )
+}
+
 // Describes the two image layers without hiding a confirmed image during preload.
 export function getAppIconLayerState (displayedIcon, candidateIcon) {
   const hasDisplayedIcon = !!displayedIcon
@@ -106,7 +159,7 @@ export function getAppIconLayerState (displayedIcon, candidateIcon) {
   }
 }
 
-// Distinguishes an unresolved icon from a confirmed numeric fallback.
+// Keeps a declared icon pending until a candidate loads or resolution is exhausted.
 export function isAppIconResolutionPending ({
   hasReadIconState,
   consumerResolutionPending,
@@ -115,8 +168,9 @@ export function isAppIconResolutionPending ({
   currentIcon,
   exhausted
 }) {
+  if (exhausted && !currentIcon) return false
   return !hasReadIconState ||
     consumerResolutionPending === true ||
     isDiscovering ||
-    (consumerResolutionPending === undefined && !!appFx && !currentIcon && !exhausted)
+    (!!appFx && !currentIcon && !exhausted)
 }

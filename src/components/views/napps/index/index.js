@@ -3,8 +3,9 @@ import '#f/components/f-to-signals.js'
 import { appEncode } from 'libp2r2p/nip19'
 import { getRelaysByPubkey, getBlossomServersByPubkey, getProfiles } from '#helpers/nostr/queries.js'
 import nostrRelays, { nappRelays } from '#services/nostr-relays.js'
-import { fetchAppMetadata } from '#services/app-metadata-fetcher.js'
+import { fetchAppMetadata, needsHtmlMetadataFallback } from '#services/app-metadata-fetcher.js'
 import { findMarkedManifestAsset, getManifestMetadata } from '#helpers/manifest.js'
+import { getAppIconLogPrefix } from '#helpers/app.js'
 import { cssVars } from '#assets/styles/theme.js'
 import { getAppLauncherUrl } from '#helpers/launcher-url.js'
 import lru from '#services/lru.js'
@@ -116,6 +117,11 @@ f('nappsIndex', function () {
             this.oldestTimestamp$(oldestCreatedAt - 1)
           }
 
+          // Start work for this batch before pagination potentially continues.
+          if (pendingManifestEvents.length > 0) {
+            this.fetchMetadataAndProfiles(pendingManifestEvents)
+          }
+
           const seemsExhausted = rawEventCount === 0 ||
             (newAppCount < APPS_PER_PAGE / 2 && rawEventCount < APPS_PER_PAGE)
 
@@ -129,11 +135,6 @@ f('nappsIndex', function () {
 
           if (seemsExhausted) {
             this.hasMore$(false)
-          }
-
-          // Resolve metadata fallbacks and profiles in the background (fire-and-forget)
-          if (pendingManifestEvents.length > 0) {
-            this.fetchMetadataAndProfiles(pendingManifestEvents)
           }
         }
 
@@ -186,38 +187,74 @@ f('nappsIndex', function () {
         const authorPubkeys = [...new Set(manifestEvents.map(e => e.pubkey))]
         const profilesPromise = this.loadProfiles(authorPubkeys)
 
-        const [relaysByAuthor, blossomServersByAuthor] = await Promise.all([
-          getRelaysByPubkey(authorPubkeys),
-          getBlossomServersByPubkey(authorPubkeys)
-        ])
-
         const iconCache = lru.ns('apps')
+        const manifestsByAuthor = new Map()
+        for (const manifestEvent of manifestEvents) {
+          const events = manifestsByAuthor.get(manifestEvent.pubkey) || []
+          events.push(manifestEvent)
+          manifestsByAuthor.set(manifestEvent.pubkey, events)
+        }
 
-        await Promise.all(
-          manifestEvents.map(async (manifestEvent) => {
+        await Promise.all([...manifestsByAuthor].map(async ([pubkey, authorEvents]) => {
+          let relaysByAuthor
+          let blossomServersByAuthor
+          try {
+            relaysByAuthor = await getRelaysByPubkey([pubkey])
+            blossomServersByAuthor = await getBlossomServersByPubkey([pubkey], {
+              _getRelaysByPubkey: async () => relaysByAuthor
+            })
+          } catch (err) {
+            const logPrefixes = authorEvents
+              .map(event => this.createAppFromManifestEvent(event)?.id)
+              .filter(Boolean)
+              .map(getAppIconLogPrefix)
+              .join(' ')
+            console.error(`${logPrefixes || getAppIconLogPrefix(null)} Failed to fetch app author services:`, err)
+          }
+
+          const relays = [...new Set([
+            ...(relaysByAuthor?.[pubkey]?.write || []),
+            ...nappRelays
+          ])]
+          const blossomServers = blossomServersByAuthor?.[pubkey] || []
+
+          await Promise.all(authorEvents.map(async manifestEvent => {
             const app = this.createAppFromManifestEvent(manifestEvent)
             if (!app) return
+            const cacheKey = `appById_${app.id}_icon`
             let metadata
             try {
-              const relays = [...new Set([
-                ...(relaysByAuthor[manifestEvent.pubkey]?.write || []),
-                ...nappRelays
-              ])]
-              const cacheKey = `appById_${app.id}_icon`
               metadata = await fetchAppMetadata(manifestEvent, relays, {
-                blossomServers: blossomServersByAuthor[manifestEvent.pubkey] || [],
-                cachedIcon: iconCache.getItem(cacheKey)
+                blossomServers,
+                cachedIcon: iconCache.getItem(cacheKey),
+                skipHtml: true,
+                appId: app.id
               })
+              if (metadata.icon) iconCache.setItem(cacheKey, metadata.icon)
+              const needsHtml = needsHtmlMetadataFallback(metadata)
 
-              if (metadata.icon) {
-                try {
-                  iconCache.setItem(cacheKey, metadata.icon)
-                } catch (err) {
-                  console.error('Failed to cache icon:', err)
-                }
+              this.apps$(apps => apps.map(current => current.id === app.id
+                ? {
+                    ...current,
+                    name: metadata.name || current.name,
+                    description: metadata.description || current.description,
+                    iconFx: metadata.icon?.fx || current.iconFx,
+                    // HTML and Web App Manifest discovery may still add icon candidates.
+                    iconResolutionPending: needsHtml
+                  }
+                : current
+              ))
+
+              if (needsHtml) {
+                metadata = await fetchAppMetadata(manifestEvent, relays, {
+                  blossomServers,
+                  cachedIcon: metadata.icon,
+                  appId: app.id
+                })
+                if (metadata.icon) iconCache.setItem(cacheKey, metadata.icon)
               }
             } catch (err) {
-              console.error('Failed to fetch app metadata:', err)
+              console.error(`${getAppIconLogPrefix(app.id)} Failed to fetch app metadata:`, err)
             } finally {
               this.apps$(apps => apps.map(current => current.id === app.id
                 ? {
@@ -230,8 +267,8 @@ f('nappsIndex', function () {
                 : current
               ))
             }
-          })
-        )
+          }))
+        }))
         await profilesPromise
       } catch (err) {
         console.error('Failed to fetch app metadata and profiles:', err)

@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { eventToProfile, getProfiles, selectPreferredProfile } from '#helpers/nostr/queries.js'
+import {
+  eventToProfile,
+  getBlossomServersByPubkey,
+  getProfiles,
+  getRelaysByPubkey,
+  selectPreferredProfile
+} from '#helpers/nostr/queries.js'
 
 describe('Nostr profiles', () => {
   it('does not generate a fallback when the profile has a picture', async () => {
@@ -148,5 +154,67 @@ describe('Nostr profiles', () => {
     const cached = { picture: 'data:image/svg+xml,legacy', meta: { events: [event] } }
     const fresh = { picture: 'data:image/svg+xml,current', meta: { events: [event], generatedPicture: true } }
     assert.equal(selectPreferredProfile(cached, fresh), fresh)
+  })
+})
+
+describe('Nostr service discovery', () => {
+  it('shares concurrent relay-list queries and caches the fallback', async () => {
+    const pubkey = '1'.repeat(64)
+    let calls = 0
+    let release
+    const gate = new Promise(resolve => { release = resolve })
+    const dependencies = {
+      _nostrRelays: {
+        async getEvents () {
+          calls++
+          return gate
+        }
+      }
+    }
+    const first = getRelaysByPubkey([pubkey], dependencies)
+    const second = getRelaysByPubkey([pubkey], dependencies)
+    release({ result: [], errors: [] })
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    const cached = await getRelaysByPubkey([pubkey], dependencies)
+    assert.equal(calls, 1)
+    assert.equal(firstResult[pubkey], secondResult[pubkey])
+    assert.equal(secondResult[pubkey], cached[pubkey])
+  })
+
+  it('shares concurrent Blossom server queries', async () => {
+    const pubkey = '2'.repeat(64)
+    let relayMapCalls = 0
+    let eventCalls = 0
+    let release
+    const gate = new Promise(resolve => { release = resolve })
+    const dependencies = {
+      async _getRelaysByPubkey () {
+        relayMapCalls++
+        return { [pubkey]: { read: ['wss://relay.test'], write: ['wss://relay.test'] } }
+      },
+      _nostrRelays: {
+        async getEvents () {
+          eventCalls++
+          return gate
+        }
+      }
+    }
+    const first = getBlossomServersByPubkey([pubkey], dependencies)
+    const second = getBlossomServersByPubkey([pubkey], dependencies)
+    release({
+      result: [{
+        id: 'a'.repeat(64), kind: 10063, pubkey, created_at: 1,
+        tags: [
+          ['server', 'http://localhost:3000'],
+          ['server', 'https://blossom.test/'],
+          ['server', 'https://blossom.test/path']
+        ]
+      }]
+    })
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    assert.equal(relayMapCalls, 1)
+    assert.equal(eventCalls, 1)
+    assert.deepEqual(firstResult[pubkey], ['https://blossom.test'])
+    assert.equal(firstResult[pubkey], secondResult[pubkey])
   })
 })

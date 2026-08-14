@@ -127,7 +127,12 @@ export function extractHtmlMetadata (htmlContent) {
   }
 
   iconSources.sort((left, right) => left.priority - right.priority || left.index - right.index)
-  return { name, description, baseHref, iconSources: iconSources.map(({ href, kind }) => ({ href, kind })) }
+  return {
+    name,
+    description,
+    baseHref,
+    iconSources: iconSources.map(({ href, kind, priority }) => ({ href, kind, priority }))
+  }
 }
 
 // Extracts ordered icon references from a parsed Web App Manifest.

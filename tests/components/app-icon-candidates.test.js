@@ -3,11 +3,14 @@ import { describe, it } from 'node:test'
 
 import {
   appIconMonogramPalettes,
+  getEquivalentAppIconCandidateIndex,
   getAppIconLayerState,
   getAppIconCandidateState,
   getAppIconMonogram,
+  getAppIconUpgradeIndex,
   isAppIconResolutionPending,
   normalizeAppIconCandidates,
+  promoteAppIconCandidate,
   reconcileAppIconCandidates
 } from '#shared/app-icon-candidates.js'
 
@@ -67,6 +70,26 @@ describe('app icon candidates', () => {
       { fx: 'primary', url: 'https://two.test/icon', source: 'manifest' },
       { fx: 'favicon', url: 'data:image/png;base64,fallback', source: 'manifest' }
     ])
+  })
+
+  it('remembers the first server that actually loaded as the primary candidate', () => {
+    const icon = {
+      url: 'https://dead.test/icon',
+      candidates: [
+        { fx: 'same-root', url: 'https://dead.test/icon' },
+        { fx: 'same-root', url: 'https://healthy.test/icon' }
+      ],
+      htmlDiscovered: true
+    }
+    const promoted = promoteAppIconCandidate(icon, {
+      fx: 'same-root', url: 'https://healthy.test/icon', source: 'manifest'
+    })
+    assert.equal(promoted.url, 'https://healthy.test/icon')
+    assert.deepEqual(promoted.candidates.map(candidate => candidate.url), [
+      'https://healthy.test/icon',
+      'https://dead.test/icon'
+    ])
+    assert.equal(promoted.htmlDiscovered, true)
   })
 
   it('supports legacy cache entries and rejects empty candidates', () => {
@@ -153,6 +176,61 @@ describe('app icon candidates', () => {
     })
   })
 
+  it('attempts only the metadata-preferred upgrade after discovery completes', () => {
+    const displayed = {
+      fx: 'favicon-root',
+      url: 'https://blossom.test/favicon',
+      source: 'manifest',
+      priority: 200
+    }
+    const preferred = {
+      fx: 'declared-root',
+      url: 'https://blossom.test/declared',
+      source: 'html',
+      priority: 110
+    }
+    const candidates = [preferred, displayed]
+
+    assert.equal(getAppIconUpgradeIndex(candidates, displayed, new Set()), -1)
+    assert.equal(getAppIconUpgradeIndex(candidates, displayed, new Set(), {
+      discoveryComplete: true
+    }), 0)
+    assert.equal(getAppIconUpgradeIndex(candidates, displayed, new Set(), {
+      discoveryComplete: true,
+      upgradeAttempted: true
+    }), -1)
+    assert.equal(getAppIconUpgradeIndex(candidates, displayed, new Set([preferred.url]), {
+      discoveryComplete: true
+    }), -1)
+  })
+
+  it('does not treat another server for the displayed asset as a quality upgrade', () => {
+    const displayed = { fx: 'same-root', url: 'https://one.test/icon', priority: 200 }
+    const alternateServer = { fx: 'same-root', url: 'https://two.test/icon', priority: 100 }
+    assert.equal(getAppIconUpgradeIndex(
+      [alternateServer, displayed],
+      displayed,
+      new Set(),
+      { discoveryComplete: true }
+    ), -1)
+  })
+
+  it('tries another server for the same preferred asset before abandoning its upgrade', () => {
+    const first = { fx: 'preferred-root', url: 'https://one.test/icon', priority: 100 }
+    const second = { fx: 'preferred-root', url: 'https://two.test/icon', priority: 100 }
+    const fallback = { fx: 'fallback-root', url: 'https://fallback.test/icon', priority: 200 }
+    assert.equal(getEquivalentAppIconCandidateIndex(
+      [first, second, fallback],
+      first,
+      new Set([first.url])
+    ), 1)
+    assert.equal(getEquivalentAppIconCandidateIndex(
+      [first, fallback],
+      first,
+      new Set([first.url])
+    ), -1)
+  })
+
   it('shows shimmer only before the first image and keeps the old layer during preload', () => {
     const oldIcon = { fx: 'old-root', url: 'https://old.test/icon' }
     const newIcon = { fx: 'new-root', url: 'https://new.test/icon' }
@@ -174,7 +252,7 @@ describe('app icon candidates', () => {
     })
   })
 
-  it('keeps unknown consumer metadata pending until it is explicitly resolved', () => {
+  it('keeps declared icons pending until a candidate arrives or resolution is exhausted', () => {
     const initial = {
       hasReadIconState: false,
       consumerResolutionPending: undefined,
@@ -197,6 +275,12 @@ describe('app icon candidates', () => {
     assert.equal(isAppIconResolutionPending({
       ...initial,
       hasReadIconState: true,
+      consumerResolutionPending: true,
+      exhausted: true
+    }), false)
+    assert.equal(isAppIconResolutionPending({
+      ...initial,
+      hasReadIconState: true,
       appFx: 'known-root'
     }), true)
     assert.equal(isAppIconResolutionPending({
@@ -204,6 +288,13 @@ describe('app icon candidates', () => {
       hasReadIconState: true,
       consumerResolutionPending: false,
       appFx: 'known-root'
+    }), true)
+    assert.equal(isAppIconResolutionPending({
+      ...initial,
+      hasReadIconState: true,
+      consumerResolutionPending: false,
+      appFx: 'known-root',
+      exhausted: true
     }), false)
   })
 })
