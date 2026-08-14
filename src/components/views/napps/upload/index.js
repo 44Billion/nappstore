@@ -26,6 +26,7 @@ import {
 } from '#helpers/upload-app-listing.js'
 import { getAppLauncherUrl } from '#helpers/launcher-url.js'
 import { getAppIconLogPrefix } from '#helpers/app.js'
+import { getUploadErrorMessage } from '#helpers/upload-error.js'
 import lru from '#services/lru.js'
 import '#shared/app-icon.js'
 import '#shared/icons/icon-circle-number-1-filled.js'
@@ -147,11 +148,13 @@ f('nappsUpload', function () {
     async handleFolderSelect (event) {
       const files = Array.from(event.target.files)
       if (files.length === 0) return
+      store.selectedFolder$(null)
+      store.uploadError$(null)
 
       const indexFile = findIndexFile(files)
       if (!indexFile) {
         showToast(
-          'Folder must contain an index.html file at the root',
+          'Add an index.html file to the folder root, then select it again.',
           'error',
           8000
         )
@@ -161,7 +164,7 @@ f('nappsUpload', function () {
       const faviconFile = findFavicon(files)
       if (!faviconFile) {
         showToast(
-          'Folder must contain a favicon file (favicon.ico, favicon.png or .jpg etc)',
+          'Add a favicon file to the folder, then select it again.',
           'error',
           8000
         )
@@ -175,6 +178,7 @@ f('nappsUpload', function () {
     async handleUpload () {
       const files = store.selectedFolder$()
       if (!files || files.length === 0) return
+      let uploadPhase = 'preparing'
 
       store.isUploading$(true)
       store.uploadError$(null)
@@ -190,7 +194,7 @@ f('nappsUpload', function () {
 
         if (!name) {
           showToast(
-            'Could not determine app name from index.html <title>',
+            'Add a <title> to index.html, then select the folder again.',
             'error',
             8000
           )
@@ -208,6 +212,7 @@ f('nappsUpload', function () {
         })
 
         let encodedApp
+        uploadPhase = 'publishing'
         await publishApp(files, null, {
           onEvent (event) {
             store.uploadProgress$({ progress: event.progress, status: event.type })
@@ -226,6 +231,7 @@ f('nappsUpload', function () {
             }
           }
         })
+        uploadPhase = 'finishing'
 
         const { dTag, pubkey, kind } = appDecode(encodedApp)
 
@@ -264,8 +270,12 @@ f('nappsUpload', function () {
         const folderInput = document.getElementById('folder-input')
         if (folderInput) folderInput.value = ''
       } catch (err) {
-        console.log('Upload error:', err)
-        store.uploadError$(err.message)
+        console.error('Upload failed:', err)
+        store.uploadError$(uploadPhase === 'preparing'
+          ? 'Could not read the selected app files. Select the folder again.'
+          : uploadPhase === 'finishing'
+            ? 'The app uploaded, but this page could not refresh it. Reload the page.'
+            : getUploadErrorMessage(err))
         store.currentUploadingApp$(null)
       } finally {
         store.isUploading$(false)
