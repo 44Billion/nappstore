@@ -1,5 +1,6 @@
 import { f, useSignal, useStore, useAsyncComputed, useTask } from '#f'
 import {
+  getAvatarImageLoadStatus,
   getSvgAvatar,
   isCacheableAvatarProfile,
   isDataAvatarPicture,
@@ -42,6 +43,7 @@ f('a-avatar', ({ h, props }) => {
   const removeCachedProfile = () => cache$()?.remove?.()
   const store = useStore(() => ({
     pk$,
+    imageElement$: null,
     loadedPicture$: null,
     rejectedPicture$: null,
     providedProfile$ () {
@@ -140,6 +142,19 @@ f('a-avatar', ({ h, props }) => {
     cleanup(() => clearTimeout(timeoutId))
   })
 
+  useTask(({ track }) => {
+    const { picture, isLoaded, image } = track(() => ({
+      picture: store.pictureToRender$(),
+      isLoaded: store.isPictureLoaded$(),
+      image: store.imageElement$()
+    }))
+    if (!picture || isLoaded) return
+
+    const status = getAvatarImageLoadStatus(image, picture)
+    if (status === 'loaded') store.markPictureLoaded({ currentTarget: image })
+    else if (status === 'failed') store.rejectPicture({ currentTarget: image })
+  }, { after: 'rendering' })
+
   if (!store.profile$() && store.refreshedProfile$.promise$().isLoading) {
     return h`<div
       style=${`
@@ -196,6 +211,7 @@ f('a-avatar', ({ h, props }) => {
           `}
         />
         <img
+          ref=${store.imageElement$}
           src=${picture}
           decoding='async'
           onload=${store.markPictureLoaded}

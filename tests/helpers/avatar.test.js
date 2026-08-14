@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  getAvatarImageLoadStatus,
   getSvgAvatar,
   isCacheableAvatarProfile,
   isDataAvatarPicture,
@@ -62,6 +63,30 @@ describe('avatar picture validation', () => {
     assert.equal(isValidAvatarPicture('https://user:secret@example.test/avatar.png'), false)
     assert.equal(isValidAvatarPicture(' avatar.png'), false)
     assert.equal(isValidAvatarPicture({ src: 'avatar.png' }), false)
+  })
+})
+
+describe('reused avatar images', () => {
+  const picture = 'https://example.test/avatar.png'
+  const image = ({ src = picture, isConnected = true, complete = true, naturalWidth = 64 } = {}) => ({
+    isConnected,
+    complete,
+    naturalWidth,
+    getAttribute: name => name === 'src' ? src : null
+  })
+
+  it('recognizes an already-loaded matching image', () => {
+    assert.equal(getAvatarImageLoadStatus(image(), picture), 'loaded')
+  })
+
+  it('recognizes a completed broken image', () => {
+    assert.equal(getAvatarImageLoadStatus(image({ naturalWidth: 0 }), picture), 'failed')
+  })
+
+  it('ignores pending, detached and stale images', () => {
+    assert.equal(getAvatarImageLoadStatus(image({ complete: false }), picture), 'pending')
+    assert.equal(getAvatarImageLoadStatus(image({ isConnected: false }), picture), 'pending')
+    assert.equal(getAvatarImageLoadStatus(image({ src: 'https://example.test/old.png' }), picture), 'pending')
   })
 })
 

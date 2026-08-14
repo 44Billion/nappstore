@@ -21,6 +21,18 @@ export const isDataAvatarPicture = function (picture) {
     /^data:image\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*(?:;base64)?,/i.test(picture)
 }
 
+// Reconciles a reused image whose load/error event may already have fired.
+export function getAvatarImageLoadStatus (image, picture) {
+  if (
+    !image?.isConnected ||
+    !picture ||
+    image.getAttribute('src') !== picture ||
+    !image.complete
+  ) return 'pending'
+
+  return image.naturalWidth > 0 ? 'loaded' : 'failed'
+}
+
 // Accepts only self-contained images and explicit HTTP(S) image URLs.
 export const isValidAvatarPicture = function (picture) {
   if (
