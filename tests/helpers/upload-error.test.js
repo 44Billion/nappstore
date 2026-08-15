@@ -18,6 +18,14 @@ describe('upload error messages', () => {
       'The files uploaded, but the app could not be published. Check your write relays and try again.'
     )
     assert.equal(
+      getUploadErrorMessage({ code: 'NAPPUP_SIGNER_LOCKED' }),
+      'Your signing account is locked. Unlock it, then try the upload again.'
+    )
+    assert.equal(
+      getUploadErrorMessage({ code: 'NAPPUP_SIGNER_DENIED' }),
+      'Approve the Nostr signing request, then try again.'
+    )
+    assert.equal(
       getUploadErrorMessage({ code: 'NAPPUP_UPLOAD_FAILED' }),
       'Upload failed. Check your connection and try again.'
     )
@@ -33,6 +41,33 @@ describe('upload error messages', () => {
   it('recognizes rejected signing prompts through a wrapped cause', () => {
     assert.equal(
       getUploadErrorMessage({ cause: new Error('User rejected request') }),
+      'Approve the Nostr signing request, then try again.'
+    )
+  })
+
+  it('recognizes a locked signing account through a wrapped cause', () => {
+    assert.equal(
+      getUploadErrorMessage({
+        code: 'NAPPUP_MANIFEST_UPLOAD_FAILED',
+        cause: new Error('VAULT_LOCKED')
+      }),
+      'Your signing account is locked. Unlock it, then try the upload again.'
+    )
+    assert.equal(
+      getUploadErrorMessage({
+        code: 'NAPPUP_IRFS_UPLOAD_FAILED',
+        cause: new Error('The vault is locked')
+      }),
+      'Your signing account is locked. Unlock it, then try the upload again.'
+    )
+  })
+
+  it('recognizes a denied signing prompt through a wrapped cause', () => {
+    assert.equal(
+      getUploadErrorMessage({
+        code: 'NAPPUP_BLOSSOM_UPLOAD_FAILED',
+        cause: new Error('Permission denied')
+      }),
       'Approve the Nostr signing request, then try again.'
     )
   })

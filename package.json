@@ -33,7 +33,7 @@
     "@dicebear/core": "^10.4.0",
     "@dicebear/styles": "^10.3.0",
     "libp2r2p": "^0.10.6",
-    "nappup": "^2.3.7",
+    "nappup": "^2.3.8",
     "nmmr": "^2.0.0",
     "thenameisf": "^1.1.1",
     "url-router": "^13.0.0"

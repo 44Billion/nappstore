@@ -10,8 +10,31 @@ const messagesByCode = Object.freeze({
   NAPPUP_BLOSSOM_UPLOAD_FAILED: 'Check your Blossom servers, then try the upload again.',
   NAPPUP_IRFS_UPLOAD_FAILED: 'Check your write relays, then try the upload again.',
   NAPPUP_MANIFEST_UPLOAD_FAILED: 'The files uploaded, but the app could not be published. Check your write relays and try again.',
+  NAPPUP_SIGNER_LOCKED: 'Your signing account is locked. Unlock it, then try the upload again.',
+  NAPPUP_SIGNER_DENIED: 'Approve the Nostr signing request, then try again.',
   NAPPUP_UPLOAD_FAILED: 'Upload failed. Check your connection and try again.'
 })
+
+const LOCKED_ACCOUNT_PATTERNS = [
+  /^VAULT_LOCKED$/,
+  /vault (?:is )?locked/i,
+  /account (?:is )?locked/i,
+  /wallet (?:is )?locked/i
+]
+
+// Detects a locked signing account (e.g. the ez-vault signer) across the
+// cause chain, so the recovery hint mentions unlocking instead of relays.
+function isAccountLocked (error) {
+  let current = error
+  for (let depth = 0; current && depth < 6; depth++) {
+    if (typeof current.message === 'string' &&
+        LOCKED_ACCOUNT_PATTERNS.some(pattern => pattern.test(current.message))) {
+      return true
+    }
+    current = current.cause
+  }
+  return false
+}
 
 // Detects a rejected signing prompt across common NIP-07 provider errors.
 function isSigningRejection (error) {
@@ -27,7 +50,8 @@ function isSigningRejection (error) {
 
 // Converts library and legacy upload errors into concise recovery instructions.
 export function getUploadErrorMessage (error) {
-  if (isSigningRejection(error)) return 'Approve the Nostr signing request, then try again.'
+  if (isAccountLocked(error)) return messagesByCode.NAPPUP_SIGNER_LOCKED
+  if (isSigningRejection(error)) return messagesByCode.NAPPUP_SIGNER_DENIED
   if (messagesByCode[error?.code]) return messagesByCode[error.code]
 
   const message = typeof error?.message === 'string' ? error.message : ''
