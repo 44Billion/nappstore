@@ -32,8 +32,8 @@
   "dependencies": {
     "@dicebear/core": "^10.4.0",
     "@dicebear/styles": "^10.3.0",
-    "libp2r2p": "^0.10.5",
-    "nappup": "^2.3.6",
+    "libp2r2p": "^0.10.6",
+    "nappup": "^2.3.7",
     "nmmr": "^2.0.0",
     "thenameisf": "^1.1.1",
     "url-router": "^13.0.0"

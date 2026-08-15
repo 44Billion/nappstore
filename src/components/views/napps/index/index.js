@@ -14,6 +14,7 @@ import '#shared/avatar.js'
 
 const APPS_PER_PAGE = 20
 const DEFAULT_MANIFEST_KIND = 35128
+const PROFILE_RETRY_DELAY_MS = 15000
 
 function getTagValue (tags, key) {
   if (!Array.isArray(tags)) return null
@@ -40,6 +41,9 @@ f('nappsIndex', function () {
     isFirstLoad$: true,
     pendingOpenAppId$: null,
     pendingOpenTimeoutId$: null,
+    pendingProfileRetryPubkeys$: [],
+    retriedProfilePubkeys$: [],
+    profileRetryTimeoutId$: null,
 
     showOpenFeedback (appId) {
       const existingTimeout = this.pendingOpenTimeoutId$()
@@ -298,10 +302,33 @@ f('nappsIndex', function () {
       }
     },
 
-    async loadProfiles (pubkeys) {
+    scheduleProfileRetry (pubkeys) {
+      const alreadyRetried = new Set(this.retriedProfilePubkeys$())
+      const queued = new Set(this.pendingProfileRetryPubkeys$())
+      for (const pubkey of pubkeys) {
+        if (!alreadyRetried.has(pubkey)) queued.add(pubkey)
+      }
+      this.pendingProfileRetryPubkeys$([...queued])
+      if (!queued.size || this.profileRetryTimeoutId$()) return
+
+      const timeoutId = setTimeout(() => {
+        this.profileRetryTimeoutId$(null)
+        const pending = this.pendingProfileRetryPubkeys$()
+        this.pendingProfileRetryPubkeys$([])
+        this.retriedProfilePubkeys$([...new Set([
+          ...this.retriedProfilePubkeys$(),
+          ...pending
+        ])])
+        this.loadProfiles(pending, { retryGenerated: true })
+      }, PROFILE_RETRY_DELAY_MS)
+      this.profileRetryTimeoutId$(timeoutId)
+    },
+
+    async loadProfiles (pubkeys, { retryGenerated = false } = {}) {
       const profileCache = this.profileCache$()
       const uniquePubkeys = [...new Set(pubkeys)].filter(
-        pk => !Object.prototype.hasOwnProperty.call(profileCache, pk)
+        pk => !Object.prototype.hasOwnProperty.call(profileCache, pk) ||
+          (retryGenerated && profileCache[pk]?.meta?.generatedName)
       )
 
       if (uniquePubkeys.length === 0) return
@@ -309,6 +336,11 @@ f('nappsIndex', function () {
       try {
         const results = await getProfiles(uniquePubkeys)
         this.profileCache$(current => ({ ...current, ...results }))
+        if (!retryGenerated) {
+          this.scheduleProfileRetry(uniquePubkeys.filter(
+            pubkey => results[pubkey]?.meta?.generatedName
+          ))
+        }
       } catch (err) {
         console.error('Failed to load profiles:', err)
         this.profileCache$(current => {
@@ -323,6 +355,7 @@ f('nappsIndex', function () {
           }
           return next
         })
+        if (!retryGenerated) this.scheduleProfileRetry(uniquePubkeys)
       }
     },
 
@@ -369,6 +402,8 @@ f('nappsIndex', function () {
       if (timeoutId) {
         clearTimeout(timeoutId)
       }
+      const profileRetryTimeoutId = store.profileRetryTimeoutId$()
+      if (profileRetryTimeoutId) clearTimeout(profileRetryTimeoutId)
     }
   })
 

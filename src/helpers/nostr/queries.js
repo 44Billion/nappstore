@@ -1,6 +1,10 @@
-import nostrRelays, { seedRelays, freeRelays } from '#services/nostr-relays.js'
+import nostrRelays, { freeRelays } from '#services/nostr-relays.js'
 import { npubEncode } from 'libp2r2p/nip19'
-import { pickRelaysForPubkeys } from 'libp2r2p/relay'
+import {
+  getLatestEventsByPubkey,
+  getRelaysByPubkey as getNip65RelaysByPubkey,
+  pickRelaysForPubkeys
+} from 'libp2r2p/relay'
 import { isValidPublicBlossomServerUrl, normalizeBlossomServerUrl } from 'libp2r2p/url'
 import { getSvgAvatar } from '#helpers/avatar.js'
 import { getRandomId } from '#helpers/misc.js'
@@ -9,6 +13,7 @@ import { maybeUnref } from '#helpers/timer.js'
 export { pickRelaysForPubkeys }
 
 const PROFILE_CACHE_TTL = 3 * 60 * 1000
+const PROFILE_FALLBACK_RELAY_LIMIT = 3
 const profilesByPubkey = {}
 const profileRequestsByPubkey = new Map()
 
@@ -61,38 +66,38 @@ export function selectPreferredProfile (cachedProfile, freshProfile) {
   return freshProfile
 }
 
-async function loadMissingProfiles (pubkeys, { nostrRelays, getRelaysByPubkey, getAvatar }) {
-  const relaysByAuthor = await getRelaysByPubkey(pubkeys)
-  const relayToAuthors = pickRelaysForPubkeys(pubkeys, relaysByAuthor)
+async function loadMissingProfiles (pubkeys, { nostrRelays, getRelaysByPubkey, getAvatar, fallbackRelays }) {
+  const { byPubkey } = await getLatestEventsByPubkey(pubkeys, {
+    kinds: [0],
+    fallbackRelays: fallbackRelays.slice(0, PROFILE_FALLBACK_RELAY_LIMIT),
+    _getRelaysByPubkey: getRelaysByPubkey,
+    _getEvents: (filter, relays) => nostrRelays.getEvents(filter, relays)
+  })
 
-  const results = await Promise.all(
-    [...relayToAuthors.entries()]
-      .map(([relay, authors]) =>
-        nostrRelays.getEvents({ kinds: [0], authors }, [relay])
-      )
-  )
-  const allEvents = results.flatMap(r => r.result)
-
-  const latestByPk = {}
-  for (const event of allEvents) {
-    if (isNewerReplaceableEvent(event, latestByPk[event.pubkey])) latestByPk[event.pubkey] = event
-  }
-
-  await Promise.all(pubkeys.map(async (pubkey) => {
-    const event = latestByPk[pubkey]
+  const loadedProfiles = {}
+  await Promise.all(pubkeys.map(async pubkey => {
+    const event = byPubkey[pubkey]
     const profile = event
       ? await eventToProfile(event, { _getSvgAvatar: getAvatar })
       : await createFallbackProfile(pubkey, getAvatar)
-    cacheProfile(pubkey, profile)
+    loadedProfiles[pubkey] = profile
+    // A generated profile represents a transient miss, not durable metadata.
+    if (event) cacheProfile(pubkey, profile)
   }))
+  return loadedProfiles
 }
 
 /**
  * Fetches profiles for multiple pubkeys efficiently.
- * Uses the minimum set of write relays that cover all pubkeys.
+ * Batches authors across their primary and fallback relays.
  */
 export async function getProfiles (pubkeys,
-  { _nostrRelays = nostrRelays, _getRelaysByPubkey = getRelaysByPubkey, _getSvgAvatar = getSvgAvatar } = {}
+  {
+    _nostrRelays = nostrRelays,
+    _getRelaysByPubkey = getRelaysByPubkey,
+    _getSvgAvatar = getSvgAvatar,
+    _freeRelays = freeRelays
+  } = {}
 ) {
   const missingPubkeys = [...new Set(pubkeys)].filter(pk => !profilesByPubkey[pk])
   const pubkeysToLoad = missingPubkeys.filter(pk => !profileRequestsByPubkey.has(pk))
@@ -101,7 +106,8 @@ export async function getProfiles (pubkeys,
     const request = loadMissingProfiles(pubkeysToLoad, {
       nostrRelays: _nostrRelays,
       getRelaysByPubkey: _getRelaysByPubkey,
-      getAvatar: _getSvgAvatar
+      getAvatar: _getSvgAvatar,
+      fallbackRelays: _freeRelays
     }).finally(() => {
       for (const pubkey of pubkeysToLoad) {
         if (profileRequestsByPubkey.get(pubkey) === request) {
@@ -115,12 +121,13 @@ export async function getProfiles (pubkeys,
     }
   }
 
-  await Promise.all([...new Set(
+  const requestResults = await Promise.all([...new Set(
     missingPubkeys.map(pk => profileRequestsByPubkey.get(pk)).filter(Boolean)
   )])
 
   return pubkeys.reduce((profiles, pubkey) => {
-    profiles[pubkey] = profilesByPubkey[pubkey]
+    profiles[pubkey] = profilesByPubkey[pubkey] || requestResults
+      .find(result => Object.prototype.hasOwnProperty.call(result, pubkey))?.[pubkey]
     return profiles
   }, {})
 }
@@ -182,59 +189,13 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
   }
 }
 
-const relaysByPubkey = {}
-const relayRequestsByPubkey = new Map()
-
-function cacheRelays (pubkey, relays) {
-  relaysByPubkey[pubkey] = relays
-  maybeUnref(setTimeout(() => {
-    if (relaysByPubkey[pubkey] === relays) delete relaysByPubkey[pubkey]
-  }, PROFILE_CACHE_TTL))
-}
-
-async function loadMissingRelays (pubkeys, nostrRelays) {
-  const { result: getEventsResult, errors } = await nostrRelays.getEvents(
-    { kinds: [10002], authors: pubkeys, limit: pubkeys.length },
-    seedRelays
-  )
-  if (errors.length) console.log(errors)
-
-  const latestByPubkey = {}
-  for (const event of getEventsResult) {
-    if (isNewerReplaceableEvent(event, latestByPubkey[event.pubkey])) latestByPubkey[event.pubkey] = event
-  }
-
-  for (const pubkey of pubkeys) {
-    const event = latestByPubkey[pubkey]
-    cacheRelays(pubkey, event
-      ? eventToRelays(event)
-      : { read: freeRelays.slice(0, 2), write: freeRelays.slice(0, 2), meta: { events: [] } }
-    )
-  }
-}
-
 // Returns a mapping of pubkeys to their relays.
 export async function getRelaysByPubkey (pubkeys, { _nostrRelays = nostrRelays } = {}) {
-  const uniquePubkeys = [...new Set(pubkeys)]
-  const missingPubkeys = uniquePubkeys.filter(pk => !relaysByPubkey[pk])
-  const pubkeysToLoad = missingPubkeys.filter(pk => !relayRequestsByPubkey.has(pk))
-  if (pubkeysToLoad.length > 0) {
-    const request = loadMissingRelays(pubkeysToLoad, _nostrRelays).finally(() => {
-      for (const pubkey of pubkeysToLoad) {
-        if (relayRequestsByPubkey.get(pubkey) === request) relayRequestsByPubkey.delete(pubkey)
-      }
-    })
-    for (const pubkey of pubkeysToLoad) relayRequestsByPubkey.set(pubkey, request)
+  const options = { cacheMs: PROFILE_CACHE_TTL }
+  if (_nostrRelays !== nostrRelays) {
+    options._getEvents = (...args) => _nostrRelays.getEvents(...args)
   }
-
-  await Promise.all([...new Set(
-    missingPubkeys.map(pk => relayRequestsByPubkey.get(pk)).filter(Boolean)
-  )])
-
-  return pubkeys.reduce((acc, pubkey) => {
-    acc[pubkey] = relaysByPubkey[pubkey]
-    return acc
-  }, {})
+  return await getNip65RelaysByPubkey(pubkeys, options)
 }
 
 // Returns the relays for a single pubkey.
@@ -300,24 +261,4 @@ export async function getBlossomServersByPubkey (pubkeys, { _nostrRelays = nostr
     acc[pubkey] = blossomServersByPubkey[pubkey]
     return acc
   }, {})
-}
-
-export function eventToRelays (event) {
-  if (typeof event !== 'object' || event === null || event.kind !== 10002 || typeof event.pubkey !== 'string') {
-    throw new Error('invalid event')
-  }
-
-  const result = event.tags.filter(t => t[0] === 'r').reduce((r, t) => {
-    switch (t[2]) {
-      case 'read': r.read.push(t[1]); break
-      case 'write': r.write.push(t[1]); break
-      case '':
-      default: r.read.push(t[1]); r.write.push(t[1])
-    }
-    return r
-  }, { read: [], write: [], meta: { events: [event] } })
-  result.read = [...new Set(result.read)]
-  result.write = [...new Set(result.write)]
-
-  return result
 }
