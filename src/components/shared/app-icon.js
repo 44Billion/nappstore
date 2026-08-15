@@ -39,11 +39,15 @@ function componentAbortError () {
 
 // Rejects late load/error events from a candidate that is no longer current.
 function imageMatchesCandidate (image, candidate) {
-  const loadedUrl = image.currentSrc || image.src
   try {
-    return new URL(loadedUrl, document.baseURI).href === new URL(candidate.url, document.baseURI).href
+    const candidateHref = new URL(candidate.url, document.baseURI).href
+    // The assigned src always identifies the candidate we set; currentSrc is
+    // the resource actually loaded after redirects (e.g. a blossom server
+    // redirecting to a CDN), which would otherwise never match the candidate.
+    return new URL(image.src, document.baseURI).href === candidateHref ||
+      new URL(image.currentSrc || image.src, document.baseURI).href === candidateHref
   } catch (_) {
-    return loadedUrl === candidate.url
+    return image.src === candidate.url || (image.currentSrc || image.src) === candidate.url
   }
 }
 
