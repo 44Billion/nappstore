@@ -1,14 +1,11 @@
 import { f, useStore } from '#f'
 import '#f/components/f-svg.js'
 
-f('iconMaximize', function () {
-  // https://tabler.io/icons/icon/maximize
+f('icon-filter', function () {
+  // https://tabler.io/icons/icon/filter
   const store = useStore({
     path$: [
-      'M4 8v-2a2 2 0 0 1 2 -2h2',
-      'M4 16v2a2 2 0 0 0 2 2h2',
-      'M16 4h2a2 2 0 0 1 2 2v2',
-      'M16 20h2a2 2 0 0 0 2 -2v-2'
+      'M4 4h16v2.172a2 2 0 0 1 -.586 1.414l-4.414 4.414v7l-6 2v-8.5l-4.48 -4.928a2 2 0 0 1 -.52 -1.345v-2.227'
     ],
     viewBox$: '2 2 20 20'
   })

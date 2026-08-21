@@ -1,5 +1,5 @@
 import { f, useStore } from '#f'
-import '#shared/svg.js'
+import '#f/components/f-svg.js'
 
 f('iconMinimize', function () {
   // https://tabler.io/icons/icon/minimize
@@ -13,7 +13,7 @@ f('iconMinimize', function () {
     viewBox$: '2 2 20 20'
   })
 
-  return this.h`<a-svg
+  return this.h`<f-svg
     props=${{
       ...store,
       ...this.props

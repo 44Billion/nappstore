@@ -189,6 +189,28 @@ describe('Nostr profiles', () => {
     assert.equal(profile.meta.generatedName, true)
   })
 
+  it('exposes a NIP-05 from the profile content or a nip05 tag', async () => {
+    const fromContent = await eventToProfile({
+      kind: 0,
+      pubkey: 'e'.repeat(64),
+      tags: [],
+      content: JSON.stringify({ name: 'Alice', nip05: 'alice@example.com' })
+    }, {
+      _getSvgAvatar: () => '<svg />'
+    })
+    assert.equal(fromContent.nip05, 'alice@example.com')
+
+    const fromTag = await eventToProfile({
+      kind: 0,
+      pubkey: 'f'.repeat(64),
+      tags: [['nip05', 'fiatjaf.com']],
+      content: '{}'
+    }, {
+      _getSvgAvatar: () => '<svg />'
+    })
+    assert.equal(fromTag.nip05, 'fiatjaf.com')
+  })
+
   it('selects the newest profile across both relays with the NIP-01 tie break', async () => {
     const pubkey = 'd'.repeat(64)
     const eventsByRelay = {

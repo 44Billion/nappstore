@@ -1,12 +1,13 @@
-import { f, useStore, useComputed } from '#f'
+import { f, useStore, useComputed, useGlobalSignal, useLocation } from '#f'
 import { cssVars } from '#assets/styles/theme.js'
-import useLocation from '#hooks/use-location.js'
 import '#shared/icons/icon-cube-spark.js'
 import '#shared/icons/icon-arrow-big-up-line.js'
+import '#shared/icons/icon-filter.js'
 
 f('homeTabs', function () {
   const loc = useLocation()
   const currentPath$ = useComputed(() => loc.route$().url.pathname)
+  const filterBarOpen$ = useGlobalSignal('nappstore-filter-bar', false)
 
   const store = useStore(() => ({
     onHomeClick (e) {
@@ -20,6 +21,7 @@ f('homeTabs', function () {
   }))
 
   const currentPath = currentPath$()
+  const filterBarOpen = filterBarOpen$()
   const isHomeActive = currentPath === '/'
   const isUploadActive = currentPath === '/upload'
 
@@ -56,6 +58,18 @@ f('homeTabs', function () {
       alignItems: 'center',
       padding: '8px 0'
     }}>
+      <style>
+        .nappstore-filter-toggle {
+          display: none;
+          align-items: center;
+          justify-content: center;
+        }
+        @media (max-width: 718px) {
+          .nappstore-filter-toggle {
+            display: flex;
+          }
+        }
+      </style>
       <a
         href='/'
         onclick=${store.onHomeClick}
@@ -84,6 +98,36 @@ f('homeTabs', function () {
           }}
         /><span style=${{ paddingLeft: '7px' }}>Upload</span>
       </a>
+
+      ${
+        isHomeActive
+          ? this.h`
+              <button
+                class='nappstore-filter-toggle'
+                onclick=${() => filterBarOpen$(v => !v)}
+                title='Toggle filters'
+                aria-pressed=${filterBarOpen ? 'true' : 'false'}
+                style=${{
+                  cursor: 'pointer',
+                  width: '34px',
+                  height: '34px',
+                  borderRadius: '50%',
+                  border: '1px solid ' + cssVars.colors.bg2,
+                  backgroundColor: filterBarOpen
+                    ? cssVars.colors.bgSelected
+                    : cssVars.colors.bgSelected2,
+                  color: filterBarOpen
+                    ? cssVars.colors.fgOnAccent
+                    : cssVars.colors.fg,
+                  marginLeft: 'auto',
+                  flexShrink: 0
+                }}
+              >
+                <icon-filter props=${{ size: '18px' }} />
+              </button>
+            `
+          : ''
+      }
     </div>
   `
 })

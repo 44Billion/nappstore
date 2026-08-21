@@ -32,6 +32,7 @@ async function createFallbackProfile (pubkey, getAvatar) {
       encodeURIComponent(await getAvatar(pubkey))
     }`,
     npub: npubEncode(pubkey),
+    nip05: null,
     meta: { events: [], generatedName: true, generatedPicture: true }
   }
 }
@@ -171,6 +172,13 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
     eventContent.display_name?.trim?.() ||
     null
 
+  const nip05 =
+    [event.tags.find(tag => tag[0] === 'nip05')]
+      .filter(Boolean)
+      .map(tag => tag[1]?.trim?.())[0] ||
+    (typeof eventContent.nip05 === 'string' ? eventContent.nip05.trim() : '') ||
+    null
+
   return {
     name: publishedName || `User#${getRandomId().slice(0, 5)}`,
     about:
@@ -181,6 +189,7 @@ export async function eventToProfile (event, { _getSvgAvatar = getSvgAvatar } = 
       '',
     picture,
     npub: npubEncode(event.pubkey),
+    nip05,
     meta: {
       events: [event],
       generatedName: !publishedName,

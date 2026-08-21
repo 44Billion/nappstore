@@ -1,5 +1,4 @@
-import { f, useStore, useTask, useClosestStore } from '#f'
-import useLocation from '#hooks/use-location.js'
+import { f, useStore, useTask, useClosestStore, useLocation } from '#f'
 
 // props: {
 // shouldPreload($)=true|false,

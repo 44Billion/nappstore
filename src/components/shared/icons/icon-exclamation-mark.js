@@ -1,5 +1,5 @@
 import { f, useStore } from '#f'
-import '#shared/svg.js'
+import '#f/components/f-svg.js'
 
 f('iconExclamationMark', function () {
   // https://tabler.io/icons/icon/exclamation-mark
@@ -9,10 +9,10 @@ f('iconExclamationMark', function () {
       'M12 15v-10'
     ],
     viewBox$: '2 2 20 20',
-    weight$: 'bold'
+    weight: 'bold'
   })
 
-  return this.h`<a-svg
+  return this.h`<f-svg
     props=${{
       ...store,
       ...this.props

@@ -1,4 +1,5 @@
 import { f, useSignal, useStore, useAsyncComputed, useTask } from '#f'
+import '#f/components/f-svg.js'
 import {
   getAvatarImageLoadStatus,
   getSvgAvatar,
@@ -7,7 +8,6 @@ import {
   isValidAvatarPicture
 } from '#helpers/avatar.js'
 import '#shared/icons/icon-user-circle.js'
-import '#shared/svg.js'
 import { cssVars } from '#assets/styles/theme.js'
 import { getProfile, selectPreferredProfile } from '#helpers/nostr/queries.js'
 import useWebStorage from '#hooks/use-web-storage.js'
@@ -234,5 +234,5 @@ f('a-avatar', ({ h, props }) => {
     return h`<icon-user-circle props=${props} />`
   }
 
-  return h`<a-svg props=${{ ...props, style$: store.svgStyle$, svg: store.svg$() }} />`
+  return h`<f-svg props=${{ ...props, style$: store.svgStyle$, svg: store.svg$() }} />`
 })

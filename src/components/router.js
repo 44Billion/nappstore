@@ -1,6 +1,5 @@
 import Router from 'url-router'
-import { f } from '#f'
-import useLocation from '#hooks/use-location.js'
+import { f, useLocation } from '#f'
 import '#components/route.js'
 
 export const router = new Router({
