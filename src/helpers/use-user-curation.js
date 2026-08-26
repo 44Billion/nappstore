@@ -1,7 +1,7 @@
 import { useGlobalStore } from '#f'
 import { SITE_CURATION_SET } from 'libp2r2p/kind'
 import { npubEncode } from 'libp2r2p/nip19'
-import { decodeUserReference } from 'libp2r2p/nip27'
+import { tryDecodeUserReference } from 'libp2r2p/nip27'
 import nostrRelays, { nappRelays, sendEventReport } from '#services/nostr-relays.js'
 import { getProfiles, getRelays } from '#helpers/nostr/queries.js'
 import { maybePeekPublicKey } from '#helpers/nostr/nip07.js'
@@ -119,7 +119,7 @@ export function useUserCuration () {
       const pubkey = this.userPubkey$()
       if (!pubkey || this.starredAddresses$().length === 0) return null
       const nip05 = this.userNip05$()
-      const by = (nip05 && decodeUserReference(nip05)?.raw) || nip05 || npubEncode(pubkey)
+      const by = (nip05 && tryDecodeUserReference(nip05)?.raw) || nip05 || npubEncode(pubkey)
       return `${getLauncherOrigin()}/+apps?by=${encodeURIComponent(by)}&is=starred`
     }
   }))

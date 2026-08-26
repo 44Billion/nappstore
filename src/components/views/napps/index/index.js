@@ -2,7 +2,7 @@ import { f, useCallback, useStore, useTask, useSignal, useGlobalSignal, useLocat
 import '#f/components/f-to-signals.js'
 import { appEncode, naddrEncode } from 'libp2r2p/nip19'
 import { SITE_CURATION_SET } from 'libp2r2p/kind'
-import { decodeUserReference, resolveUserReference } from 'libp2r2p/nip27'
+import { resolveUserReference, tryDecodeUserReference } from 'libp2r2p/nip27'
 import {
   isValidPublicRelayUrl,
   normalizeRelayUrl
@@ -899,7 +899,7 @@ f('nappsIndex', function () {
     async addAuthor (value) {
       const text = value.trim()
       if (!text) return
-      if (!decodeUserReference(text)) {
+      if (!tryDecodeUserReference(text)) {
         showToast('Invalid author reference', 'error')
         return
       }

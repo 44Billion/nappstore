@@ -1,5 +1,5 @@
 import { appEncode } from 'libp2r2p/nip19'
-import { decodeUserReference } from 'libp2r2p/nip27'
+import { tryDecodeUserReference } from 'libp2r2p/nip27'
 import { encodeAppUrl } from 'libp2r2p/url'
 
 function isLocalHostname (hostname) {
@@ -26,7 +26,7 @@ export function getAppLauncherUrl (encodedApp, options) {
 // Builds a friendly `+<dTag>@<user>` URL when the author has a NIP-05;
 // falls back to the canonical NIP-19 app entity otherwise.
 export function getAppLauncherUrlForApp ({ dTag, pubkey, kind, nip05 }, options) {
-  const user = typeof nip05 === 'string' && nip05 && decodeUserReference(nip05)
+  const user = typeof nip05 === 'string' && nip05 && tryDecodeUserReference(nip05)
     ? nip05
     : null
   if (!user) {
