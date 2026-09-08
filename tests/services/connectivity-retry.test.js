@@ -7,61 +7,34 @@ describe('connectivity retry coordinator', () => {
     let onlineHandler
     let listenerCount = 0
     let removed = 0
-    const timers = []
     const coordinator = new ConnectivityRetryCoordinator({
       _isOnline: async () => false,
       _onOnline: handler => {
         onlineHandler = handler
         listenerCount++
         return () => { removed++ }
-      },
-      _setTimeout: (handler, delay) => {
-        const timer = { handler, delay, cleared: false }
-        timers.push(timer)
-        return timer
-      },
-      _clearTimeout: timer => { timer.cleared = true },
-      _random: () => 0.5
+      }
     })
 
     const first = coordinator.waitUntilOnline()
     const second = coordinator.waitUntilOnline()
     assert.equal(listenerCount, 1)
-    assert.equal(timers[0].delay, 5000)
 
     onlineHandler()
     await Promise.all([first, second])
     assert.equal(removed, 1)
-    assert.equal(timers[0].cleared, true)
   })
 
-  it('uses shared capped backoff probes', async () => {
-    const results = [false, false, false, true]
-    const timers = []
-    let checks = 0
+  it('stops monitoring when the final waiter is cancelled', async () => {
+    let removed = 0
     const coordinator = new ConnectivityRetryCoordinator({
-      _isOnline: async () => {
-        checks++
-        return results.shift()
-      },
-      _onOnline: () => () => {},
-      _setTimeout: (handler, delay) => {
-        const timer = { handler, delay }
-        timers.push(timer)
-        return timer
-      },
-      _clearTimeout: () => {},
-      _random: () => 0.5
+      _onOnline: () => () => { removed++ }
     })
-
-    const waiting = coordinator.waitUntilOnline()
-    for (const expectedDelay of [5000, 15000, 30000, 60000]) {
-      const timer = timers.at(-1)
-      assert.equal(timer.delay, expectedDelay)
-      await timer.handler()
-    }
-    await waiting
-    assert.equal(checks, 4)
+    const controller = new AbortController()
+    const waiting = coordinator.waitUntilOnline({ signal: controller.signal })
+    controller.abort()
+    await assert.rejects(waiting, { name: 'AbortError' })
+    assert.equal(removed, 1)
   })
 
   it('limits resumed work to three concurrent tasks', async () => {

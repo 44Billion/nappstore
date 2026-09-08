@@ -14,11 +14,11 @@ import '#shared/avatar.js'
 import '#shared/app-icon.js'
 
 // Show a user's profile and their uploaded apps
-f('profilesShow', function () {
-  const { params$ } = useClosestStore('<a-route>')
+f('profiles-show', ({ h }) => {
+  const { route$ } = useClosestStore('<f-route>')
   const { showToast } = useToast()
   const store = useStore(() => ({
-    npub$ () { return params$().npub },
+    npub$ () { return route$().params.npub },
     profile$: null,
     apps$: [],
     isFollowing$: false,
@@ -261,7 +261,7 @@ f('profilesShow', function () {
   const loggedInPubkey = store.loggedInPubkey$()
   const isOwnProfile = loggedInPubkey === pubkey
 
-  return this.h`
+  return h`
     <div style=${{
       display: 'flex',
       flexDirection: 'column',
@@ -282,7 +282,7 @@ f('profilesShow', function () {
       }}>
         ${
   isLoadingProfile
-    ? this.h`
+    ? h`
           <div style=${{
             display: 'flex',
             justifyContent: 'center',
@@ -292,7 +292,7 @@ f('profilesShow', function () {
             Loading profile...
           </div>
         `
-    : this.h`
+    : h`
           <div style=${{
             display: 'flex',
             gap: '16px',
@@ -338,7 +338,7 @@ f('profilesShow', function () {
 
               ${
   profile?.about
-    ? this.h`
+    ? h`
                 <div style=${{
                   fontSize: '14px',
                   color: cssVars.colors.fg2,
@@ -355,7 +355,7 @@ f('profilesShow', function () {
               <!-- Follow Button -->
               ${
   !isOwnProfile && loggedInPubkey
-    ? this.h`
+    ? h`
                 <button
                   onclick=${store.handleFollowToggle}
                   disabled=${isUpdatingFollow}
@@ -412,7 +412,7 @@ f('profilesShow', function () {
 
         ${
   isLoadingApps
-    ? this.h`
+    ? h`
           <div style=${{
             display: 'flex',
             justifyContent: 'center',
@@ -423,7 +423,7 @@ f('profilesShow', function () {
           </div>
         `
     : apps.length === 0
-      ? this.h`
+      ? h`
           <div style=${{
             display: 'flex',
             justifyContent: 'center',
@@ -434,7 +434,7 @@ f('profilesShow', function () {
             No apps uploaded yet
           </div>
         `
-      : apps.map((app, index) => this.h({ key: app.dTag })`
+      : apps.map((app, index) => h({ key: app.dTag })`
           <f-to-signals
             props=${{
               from: ['app'],

@@ -1,6 +1,6 @@
 import Router from 'url-router'
 import { f, useLocation } from '#f'
-import '#components/route.js'
+import '#f/components/f-route.js'
 
 export const router = new Router({
   // https://esbuild.github.io/api/#glob
@@ -13,10 +13,11 @@ export const router = new Router({
   // '/:npub(npub1.*)': { tag: 'profiles-show', loadModule: () => import('#views/profiles/show/index.js') }
 })
 
-f('aRouter', function () {
+// Mount the matched views through the History API location store.
+f('a-router', ({ h }) => {
   useLocation(router)
 
-  return this.h`
-    <a-route props=${{ path: '/(.*)', shouldPreload: true }} />
+  return h`
+    <f-route props=${{ path: '/(.*)', shouldPreload: true }} />
   `
 })

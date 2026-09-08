@@ -1,7 +1,5 @@
 import { isOnline, onOnline } from 'libp2r2p/network'
 
-const RETRY_DELAYS = [5000, 15000, 30000, 60000]
-
 function abortError () {
   const error = new Error('Connectivity wait aborted')
   error.name = 'AbortError'
@@ -21,7 +19,6 @@ export class ConnectivityRetryCoordinator {
     _onOnline = onOnline,
     _setTimeout = setTimeout,
     _clearTimeout = clearTimeout,
-    _random = Math.random,
     concurrency = 3
   } = {}) {
     this._isOnline = _isOnline
@@ -29,15 +26,12 @@ export class ConnectivityRetryCoordinator {
     // Browser timer functions require the global object as their receiver.
     this._setTimeout = (...args) => Reflect.apply(_setTimeout, globalThis, args)
     this._clearTimeout = (...args) => Reflect.apply(_clearTimeout, globalThis, args)
-    this._random = _random
     this.concurrency = concurrency
   }
 
   waiters = new Set()
   queue = []
   running = 0
-  retryIndex = 0
-  timer = null
   removeOnlineListener = null
   connectivityCheck = null
   lastOnlineAt = 0
@@ -58,7 +52,7 @@ export class ConnectivityRetryCoordinator {
     return this.connectivityCheck
   }
 
-  // Waits for a native online event or a successful shared backoff probe.
+  // Waits for connectivity confirmed by the shared libp2r2p monitor.
   waitUntilOnline ({ signal } = {}) {
     if (signal?.aborted) return Promise.reject(abortError())
 
@@ -93,22 +87,10 @@ export class ConnectivityRetryCoordinator {
     if (!this.removeOnlineListener) {
       this.removeOnlineListener = this._onOnline(() => this.#releaseWaiters())
     }
-    if (!this.timer) this.#scheduleProbe()
-  }
-
-  #scheduleProbe () {
-    const baseDelay = RETRY_DELAYS[Math.min(this.retryIndex, RETRY_DELAYS.length - 1)]
-    this.retryIndex++
-    const jitter = 0.8 + (this._random() * 0.4)
-    this.timer = this._setTimeout(async () => {
-      this.timer = null
-      if (!this.waiters.size) return this.#stopIfIdle()
-      if (await this.confirmOnline()) this.#releaseWaiters()
-      else this.#scheduleProbe()
-    }, Math.round(baseDelay * jitter))
   }
 
   #releaseWaiters () {
+    this.lastOnlineAt = Date.now()
     const waiters = [...this.waiters]
     this.waiters.clear()
     for (const waiter of waiters) {
@@ -120,9 +102,6 @@ export class ConnectivityRetryCoordinator {
 
   #stopIfIdle () {
     if (this.waiters.size) return
-    if (this.timer) this._clearTimeout(this.timer)
-    this.timer = null
-    this.retryIndex = 0
     this.removeOnlineListener?.()
     this.removeOnlineListener = null
   }

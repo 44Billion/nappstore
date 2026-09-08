@@ -43,8 +43,13 @@ ones to get the project's complete picture.
   change the src/components/app.js component (`<a-app>`) it loads (the root component).
   In fact keep app.js lean. It loads the src/components/router.js component,
   which then loads other components placed at src/components/views folder.
-- Note that route navigation should be performed using src/components/hooks/use-location.js
-  hook's methods such as location.pushState and location.replaceState.
+- This is a SPA using pathname URLs and the browser History API. Use
+  `useLocation` from `#f` with `url-router` and import
+  `#f/components/f-route.js` to render matched views. Navigate through the
+  location store's `pushState`, `replaceState`, `back`, and `forward` methods.
+  Read route data from `props.route$` or `useClosestStore('<f-route>').route$`.
+  Keep nested routers scoped to their owning components and verify deep links,
+  reloads, and browser Back/Forward. Do not restore the legacy `a-route` copy.
 
 ## Coding Style:
 
@@ -79,3 +84,14 @@ when turning it into a variable, even if it's not in camel-case.
 
 - Avoid introducing new external dependencies unless absolutely necessary.
 - If a new dependency is required, please state the reason.
+
+## Connectivity recovery
+
+- Use `isOnline` and `onOnline` from `libp2r2p/network`. The shared library
+  monitor owns connectivity probes, capped retry delays, and browser wake-up
+  listeners. `ConnectivityRetryCoordinator` owns waiters, cancellation, and
+  concurrency of resumed app work; do not restore its duplicate probe timer.
+- These consumer changes depend on the companion libp2r2p monitor update.
+  Until it is published, validate against the sibling library locally. Update
+  the npm dependency and lockfile to a version containing it before shipping;
+  the current published version does not contain the monitor.

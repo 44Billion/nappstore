@@ -18,6 +18,6 @@ export const NAPP_CATEGORIES = {
     'other', 'podcast', 'music', 'video', 'news'
   ],
   utilities: [
-    'other', 'weather', 'office', 'finances', 'learning', 'text editor', 'image editor', 'audio editor', 'video editor', 'ar', 'vr', 'ai'
+    'other', 'widget', 'weather', 'office', 'finances', 'learning', 'text editor', 'image editor', 'audio editor', 'video editor', 'ar', 'vr', 'ai'
   ]
 }
