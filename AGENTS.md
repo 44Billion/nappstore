@@ -95,3 +95,38 @@ when turning it into a variable, even if it's not in camel-case.
   Until it is published, validate against the sibling library locally. Update
   the npm dependency and lockfile to a version containing it before shipping;
   the current published version does not contain the monitor.
+
+## Local publishing credentials
+
+- This workspace shares the encrypted publisher configuration with other nsites/apps
+  in `$HOME/repositories/napps/.env`. Export `DOTENV_CONFIG_PATH` with that absolute
+  path in the shell running nappup; Bash startup files configure it locally.
+- Restart existing shells/watchers, or export the variable before publishing.
+  The path is private environment configuration, not an app asset. Never copy
+  credentials into bundles, logs, or version control. Preserve the shared identity;
+  do not generate or migrate keys implicitly. Use separate dotenv files for tests.
+
+## Local nappup checkout
+
+- Run `npm run link:nappup` after initial installation, switching Node/npm, or
+  `npm ci`. Install dependencies in `../../nappup` first. The script registers
+  that checkout globally for the active Node installation, then restores the
+  local link with `--no-save --package-lock=false`; keep links out of the lockfile.
+- Keep nappup declared as a runtime dependency because the in-app uploader imports
+  it. The local link overrides the registry package during development.
+- `npm run upload` builds and invokes the installed nappup CLI; do not bypass the
+  checkout with `npx nappup@latest`. Restart active build/watch processes after
+  changing the link. Linking does not select or migrate publisher credentials.
+
+## Upload recovery messages
+
+- nappup owns success thresholds and signer classification. Only a rejected
+  publication sets the user-facing upload error; partial replication failures
+  remain console diagnostics. Do not promote individual log messages to errors.
+- Use `NAPPUP_*` codes and `details.failures` records (`destination`, optional
+  `filename`, original `reason`). Prefer a specific action only when it applies
+  to every blocking destination; retain a general message for mixed failures.
+- Keep the manifest-failure context: files can upload successfully before the
+  app publication fails. Do not parse server messages to classify signing errors.
+- Validate recovery messages against the linked nappup API with
+  `tests/helpers/upload-error.test.js`; no legacy error-message parsing is needed.

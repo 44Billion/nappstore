@@ -15,59 +15,72 @@ const messagesByCode = Object.freeze({
   NAPPUP_UPLOAD_FAILED: 'Upload failed. Check your connection and try again.'
 })
 
-const LOCKED_ACCOUNT_PATTERNS = [
-  /^VAULT_LOCKED$/,
-  /vault (?:is )?locked/i,
-  /account (?:is )?locked/i,
-  /wallet (?:is )?locked/i
-]
+const messagesByRecovery = Object.freeze({
+  connection: 'Check your connection, then try again.',
+  timeout: 'No confirmation arrived in time. Try again shortly.',
+  relay: 'Try another write relay that accepts this app.',
+  authentication: 'Reconnect your Nostr account or choose another Blossom server.',
+  payment: 'Check the server’s payment requirements or choose another Blossom server.',
+  policy: 'Choose a Blossom server that allows this upload.',
+  size: 'Reduce the file size or choose another Blossom server.',
+  type: 'Choose a Blossom server that accepts this file type.',
+  limit: 'Wait before trying again, or choose another Blossom server.',
+  server: 'Try again later or choose another Blossom server.',
+  endpoint: 'Check the Blossom server address or choose another server.',
+  request: 'Update the uploader or choose another Blossom server.'
+})
 
-// Detects a locked signing account (e.g. the ez-vault signer) across the
-// cause chain, so the recovery hint mentions unlocking instead of relays.
-function isAccountLocked (error) {
-  let current = error
-  for (let depth = 0; current && depth < 6; depth++) {
-    if (typeof current.message === 'string' &&
-        LOCKED_ACCOUNT_PATTERNS.some(pattern => pattern.test(current.message))) {
-      return true
+// Keeps specific transport and protocol facts ahead of nested low-level causes.
+function recoveryForReason (error, seen = new Set(), depth = 0) {
+  if (!error || typeof error !== 'object' || seen.has(error) || depth >= 12) return null
+  seen.add(error)
+  try {
+    if (error.code === 'BLOSSOM_HTTP_ERROR') {
+      if (error.status === 401) return 'authentication'
+      if (error.status === 402) return 'payment'
+      if (error.status === 403) return 'policy'
+      if (error.status === 413) return 'size'
+      if (error.status === 415) return 'type'
+      if (error.status === 429) return 'limit'
+      if (error.status === 408 || error.status === 425) return 'server'
+      if ([404, 405, 410, 501, 505].includes(error.status)) return 'endpoint'
+      if ([400, 409, 411, 422].includes(error.status)) return 'request'
+      if (error.status >= 500) return 'server'
+      return null
     }
-    current = current.cause
+    if (error.category === 'connection' || error.category === 'transport') return 'connection'
+    if (error.category === 'timeout') return 'timeout'
+    if (error.category === 'relay') return 'relay'
+    const children = [...(error.cause ? [error.cause] : []), ...(Array.isArray(error.errors) ? error.errors : [])]
+    const recoveries = children.map(child => recoveryForReason(child, seen, depth + 1))
+    const recovery = recoveries[0]
+    return recovery && recoveries.every(item => item === recovery) ? recovery : null
+  } finally {
+    seen.delete(error)
   }
-  return false
 }
 
-// Detects a rejected signing prompt across common NIP-07 provider errors.
-function isSigningRejection (error) {
-  const messages = []
-  let current = error
-  for (let depth = 0; current && depth < 4; depth++) {
-    if (current.name === 'NotAllowedError') return true
-    if (typeof current.message === 'string') messages.push(current.message)
-    current = current.cause
-  }
-  return /user (?:rejected|denied)|request (?:rejected|denied)|permission denied/i.test(messages.join(' '))
+// Uses one specific instruction only when it applies to every blocking destination.
+function recoveryForFailures (error) {
+  const failures = error?.details?.failures
+  if (!Array.isArray(failures) || failures.length === 0) return null
+  const recoveries = failures.map(failure => recoveryForReason(failure.reason))
+  const recovery = recoveries[0]
+  return recovery && recoveries.every(item => item === recovery) ? messagesByRecovery[recovery] : null
 }
 
-// Converts library and legacy upload errors into concise recovery instructions.
+// Converts public upload errors into concise recovery instructions.
 export function getUploadErrorMessage (error) {
-  if (isAccountLocked(error)) return messagesByCode.NAPPUP_SIGNER_LOCKED
-  if (isSigningRejection(error)) return messagesByCode.NAPPUP_SIGNER_DENIED
+  if (error?.code === 'NAPPUP_SIGNER_LOCKED' || error?.code === 'NAPPUP_SIGNER_DENIED') {
+    return messagesByCode[error.code]
+  }
+  const recovery = recoveryForFailures(error)
+  if (recovery) {
+    return error.code === 'NAPPUP_MANIFEST_UPLOAD_FAILED'
+      ? `The files uploaded, but the app could not be published. ${recovery}`
+      : recovery
+  }
   if (messagesByCode[error?.code]) return messagesByCode[error.code]
 
-  const message = typeof error?.message === 'string' ? error.message : ''
-  if (/generic build folder|provide (?:a )?d tag with (?:the )?-d/i.test(message)) {
-    return messagesByCode.NAPPUP_GENERIC_FOLDER_NAME
-  }
-  if (/derive a valid d tag|dTag must be a non-empty string/i.test(message)) {
-    return messagesByCode.NAPPUP_INVALID_FOLDER_NAME
-  }
-  if (/no nostr signer/i.test(message)) return messagesByCode.NAPPUP_NO_SIGNER
-  if (/no outbox relays/i.test(message)) return messagesByCode.NAPPUP_NO_OUTBOX_RELAYS
-  if (/failed to upload to blossom|file\(s\) failed to upload to blossom/i.test(message)) {
-    return messagesByCode.NAPPUP_BLOSSOM_UPLOAD_FAILED
-  }
-  if (/network|fetch|offline|connection/i.test(message)) {
-    return 'Check your connection, then try again.'
-  }
   return messagesByCode.NAPPUP_UPLOAD_FAILED
 }

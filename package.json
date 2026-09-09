@@ -6,9 +6,11 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "// link:nappup": "Register the nappup checkout with the current Node/npm installation and restore the local link.",
+    "link:nappup": "(cd ../../nappup && npm link) && npm link nappup --no-save --package-lock=false",
     "start": "NODE_ENV=development node bin/build.js",
     "build": "NODE_ENV=production node bin/build.js",
-    "upload": "npm run build && npx --yes nappup@latest ./dist/nappstore/",
+    "upload": "npm run build && nappup ./dist/nappstore/",
     "serve": "python3 server.py",
     "test": "node --test 'tests/**/*.test.js'",
     "test:only": "node --test --test-only 'tests/**/*.test.js'"
@@ -33,9 +35,9 @@
     "@dicebear/core": "^10.4.0",
     "@dicebear/styles": "^10.3.0",
     "libp2r2p": "^0.10.12",
-    "nappup": "^2.3.10",
+    "nappup": "^2.3.11",
     "nmmr": "^2.0.0",
-    "thenameisf": "^1.2.7",
+    "thenameisf": "^1.2.8",
     "url-router": "^13.0.0"
   },
   "devDependencies": {
